@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Doubletake Browser</title><link rel="stylesheet" href="static/style.css"></head>
+<body>
+<header><div class="brand"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 10V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2h-7M3 16a6 6 0 0 1 6 6M3 11a11 11 0 0 1 11 11"/><circle cx="3" cy="22" r="1"/></svg><div><h1>Doubletake Browser</h1><p>One browser. One TV.</p></div></div><span id="mqttState" class="badge">Connecting to Home Assistant</span></header>
+<main>
+<section class="card controls" aria-label="Choose a page and TV">
+<label>Page<select id="pageChoice"><option value="">Add a page below</option></select></label>
+<label>TV<select id="tvChoice"><option value="">Add a TV below</option></select></label>
+<div class="actions"><button id="openBrowser">Open browser</button><button id="cast" class="primary">Show on TV</button><button id="stop" class="quiet">Stop</button></div>
+</section>
+<div class="status"><span id="sessionState" class="badge">Browser closed</span><p id="sessionDetail">Open a page to sign in, click around, or start a TV view.</p></div>
+<div id="error" class="notice error" role="alert" hidden></div>
+<form id="pairForm" class="notice pairing" hidden><div><strong>Enter the code shown on the TV</strong><p>The receiver may ask for its configured AirPlay password instead.</p></div><input id="pairValue" type="password" autocomplete="off" aria-label="TV pairing code or password" required maxlength="128"><button class="primary">Continue</button></form>
+<section class="card preview">
+<div class="previewbar"><div class="nav"><button data-browser="back" title="Go back" aria-label="Go back">←</button><button data-browser="forward" title="Go forward" aria-label="Go forward">→</button><button data-browser="reload" title="Reload page" aria-label="Reload page">↻</button></div><span id="previewLabel">Browser preview</span><div class="actions"><button id="fullscreen" class="quiet">Expand</button><button id="closeBrowser" class="quiet">Close browser</button></div></div>
+<div id="viewport"><div id="previewEmpty"><span class="empty-icon">↗</span><h2>Your browser appears here</h2><p>Use your mouse and keyboard to sign in and interact.<br>Your browser profile is saved between sessions.</p></div><div id="screen"></div></div>
+<div class="previewfoot"><span id="previewState">No browser running</span><span>Stopping AirPlay keeps the browser open.</span></div>
+</section>
+<section class="library">
+<div class="card"><div class="sectionhead"><h2>Saved pages</h2><button id="addPage">+ Add page</button></div><div id="pages" class="items"></div></div>
+<div class="card"><div class="sectionhead"><h2>TVs</h2><div class="actions"><button id="discover" class="quiet">Find Apple TVs</button><button id="addTV">+ Add TV</button></div></div><div id="tvs" class="items"></div></div>
+</section>
+<footer><span id="version"></span><span>Each TV appears in Home Assistant with saved-page launch buttons, Stop, and status.</span></footer>
+</main>
+<dialog id="editor"><form id="editForm"><div class="sectionhead"><h2 id="editTitle"></h2><button type="button" id="cancelEdit" class="quiet" aria-label="Close">✕</button></div><label>Name<input id="itemName" required maxlength="80" autocomplete="off"></label><label id="urlLabel">URL<input id="itemURL" type="url" placeholder="http://homeassistant.local:8123" maxlength="4096" autocomplete="off"></label><label id="hostLabel">IP address or hostname<input id="itemHost" maxlength="253" placeholder="192.168.1.100" autocomplete="off"></label><label id="portLabel">AirPlay port<input id="itemPort" type="number" min="1" max="65535" value="7000"></label><p id="editorError" class="formerror" role="alert"></p><div class="dialogactions"><button class="primary">Save</button></div></form></dialog>
+<dialog id="discovery"><div class="sectionhead"><h2>Apple TVs on your network</h2><button id="closeDiscovery" class="quiet" aria-label="Close">✕</button></div><div id="discovered" class="items"></div></dialog>
+<dialog id="removeDialog"><form method="dialog"><h2 id="removeTitle">Remove saved item?</h2><p id="removeDetail"></p><div class="dialogactions"><button value="cancel">Cancel</button><button id="confirmRemove" value="remove" class="danger">Remove</button></div></form></dialog>
+<script type="module" src="static/app.js"></script>
+</body></html>

@@ -1,0 +1,22 @@
+name: Home Assistant app
+on:
+  push:
+    branches: [main, 'codex/ha-app']
+    paths: ['app/**', '.github/workflows/ha-app.yml']
+  pull_request:
+    branches: [main]
+    paths: ['app/**', '.github/workflows/ha-app.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build installable app
+        run: docker build -t doubletake-app app
+      - name: Sandboxed browser preflight
+        run: |
+          docker run --rm --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
