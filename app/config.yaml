@@ -9,6 +9,10 @@ startup: application
 boot: auto
 init: true
 host_network: true
+# Chrome's setuid sandbox needs namespace creation under Docker seccomp.
+# The controller and browser run as uid 1000; protection remains enabled.
+privileged:
+  - SYS_ADMIN
 ingress: true
 ingress_port: 0
 ingress_stream: true

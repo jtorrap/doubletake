@@ -15,6 +15,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Build installable app
         run: docker build -t doubletake-app app
       - name: Sandboxed browser preflight
@@ -22,3 +25,16 @@ jobs:
           docker run --rm --cap-add SYS_ADMIN --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
       - name: App boundary and lifecycle tests
         run: docker run --rm --user 1000:1000 --entrypoint python3 -v "$PWD/app:/source:ro" doubletake-app -B -m unittest discover -s /source/tests -v
+      - name: Prepare integration fixture
+        run: |
+          go build -o bin/doubletake-test-receiver ./cmd/doubletake-test-receiver
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          npm install --prefix /tmp/app-playwright playwright@1.58.2
+      - name: Real browser, interactive preview and AirPlay transport
+        run: python3 -B app/tests/integration.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-assistant-app-evidence
+          path: artifacts/app/

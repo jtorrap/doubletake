@@ -53,7 +53,7 @@ def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_suffix(".new")
-    with tmp.open("w", opener=lambda p, flags: os.open(p, flags, 0o600)) as handle:
+    with open(tmp, "w", opener=lambda p, flags: os.open(p, flags, 0o600)) as handle:
         json.dump(value, handle, indent=2)
         handle.write("\n")
         handle.flush()
