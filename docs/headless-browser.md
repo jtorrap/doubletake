@@ -29,6 +29,10 @@ sudo make install
 
 Ubuntu's `chromium-browser` may be a Snap launcher; use an installed native
 Chromium-compatible browser and `--browser /path/to/browser` if necessary.
+The tested browser is Google Chrome, which is preferred when installed; otherwise
+the launcher looks for Chromium. Use a build with the codecs required by your
+dashboard. A Chromium build without H.264 playback support can show charts while
+leaving cameras/videos blank. Use the same browser for setup and streaming.
 Keep Chromium's sandbox enabled. The launcher refuses to run as root by default.
 `--no-browser-sandbox` is an explicit exception for isolated test fixtures, not
 a remedy for failures loading a real authenticated dashboard.
@@ -137,9 +141,21 @@ against a real dashboard or authenticated browser profile.
 
 - Upstream base: `ae06722` (full commit recorded in Git history).
 - Added browser-only launcher, VM/service instructions, and Linux smoke check.
+- [Linux verification passed](https://github.com/jtorrap/doubletake/actions/runs/34772301864)
+  on Ubuntu 24.04 with Google Chrome 152.0.7977.82: live WebSocket updates,
+  H.264 playback, private VNC setup, retained cookies/local storage, AirPlay
+  transport, and process/display cleanup. The browser window was 1280x720 at
+  15 fps; the test receiver negotiated a 1920x1080 H.264 stream. This is a
+  functional smoke check, not a sustained performance measurement.
 - The initial `xvfb-run` subprocess wrapper failed the setup shutdown check.
   The launcher now owns Xvfb directly, uses `-displayfd` for allocation, and
   supervises each process group explicitly with a private Xauthority cookie.
+- The runner's automatically selected browser reported an unsupported H.264
+  source. Explicit Google Chrome passed the video check. Automatic selection
+  now prefers Chrome when available; verify codecs on the deployed browser.
+- Sending termination signals alone did not retain browser storage in the
+  fixture. A private Chromium control pipe now requests `Browser.close`
+  before forced cleanup; the setup-to-streaming storage test passed.
 - Upstream uses Linux-specific process-death handling. Native macOS builds do
   not compile; Linux cross-compilation works, and execution tests run on Linux.
 - GitHub workflow changes require an appropriate credential scope; an existing

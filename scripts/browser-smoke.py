@@ -145,7 +145,7 @@ def main():
                     command.append("--no-browser-sandbox")
                 if args.browser:
                     command.extend(["--browser", args.browser])
-                selected_browser = args.browser or next(n for n in ["chromium", "chromium-browser", "google-chrome"] if shutil.which(n))
+                selected_browser = args.browser or next(n for n in ["google-chrome", "chromium", "chromium-browser"] if shutil.which(n))
                 print("Browser: " + selected_browser, flush=True)
                 subprocess.run([selected_browser, "--version"], check=True)
                 setup_port = free_port()

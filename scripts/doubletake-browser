@@ -87,7 +87,7 @@ def executable(name):
 
 
 def dependencies(args):
-    browser = args.browser or next((n for n in ["chromium", "chromium-browser", "google-chrome"] if shutil.which(n)), None)
+    browser = args.browser or next((n for n in ["google-chrome", "chromium", "chromium-browser"] if shutil.which(n)), None)
     if browser is None:
         raise RuntimeError("install Chromium or specify --browser")
     result = {"browser": executable(browser), "xvfb": executable("Xvfb"),

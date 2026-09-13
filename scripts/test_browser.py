@@ -76,6 +76,28 @@ class BrowserTests(unittest.TestCase):
         launcher.stop(process)
         self.assertIsNotNone(process.poll())
 
+    def test_private_pipe_requests_graceful_browser_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "browser"
+            saved = Path(directory) / "saved-profile"
+            fixture.write_text("#!/usr/bin/env python3\nimport json, os\nfrom pathlib import Path\n"
+                               "message = os.read(3, 4096).split(b'\\0')[0]\n"
+                               "assert json.loads(message)['method'] == 'Browser.close'\n"
+                               "Path(os.environ['TEST_SAVED_PROFILE']).write_text('saved')\n"
+                               "os.write(4, b'{}\\0')\n")
+            fixture.chmod(0o700)
+            config = self.config()
+            config["executables"]["browser"] = str(fixture)
+            child, command_fd, response_fd = launcher.start_browser(config, Path(directory) / "launch.html", dict(os.environ, TEST_SAVED_PROFILE=str(saved)))
+            try:
+                launcher.close_browser(child, command_fd)
+                self.assertEqual(child.returncode, 0)
+                self.assertEqual(saved.read_text(), "saved")
+            finally:
+                launcher.stop(child)
+                os.close(command_fd)
+                os.close(response_fd)
+
 
 if __name__ == "__main__":
     unittest.main()
