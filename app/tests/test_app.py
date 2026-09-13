@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -63,6 +64,29 @@ class SimulatedSession(Session):
 
 
 class AsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_updated_assets_use_new_paths_through_ingress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            client = TestClient(TestServer(create_app(directory, {}, development=True, session_factory=SimulatedSession)))
+            await client.start_server()
+            try:
+                response = await client.get('/')
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                html = await response.text()
+                urls = re.findall(r'"(assets/[^" ]+)"', html)
+                self.assertEqual(len(urls), 2)
+                self.assertNotIn('"static/app.js"', html)
+                for url in urls:
+                    self.assertRegex(url, r'^assets/(app|style)\.[0-9a-f]{16}\.(js|css)$')
+                    asset = await client.get('/' + url)
+                    self.assertEqual(asset.status, 200)
+                    body = await asset.text()
+                    if url.endswith('.js'):
+                        self.assertIn("$('pasteText').onclick", body)
+                        self.assertIn("../novnc/core/rfb.js", body)
+                self.assertEqual((await client.get('/assets/unknown.js')).status, 404)
+            finally:
+                await client.close()
+
     async def test_one_browser_switches_senders_and_inactive_stop_is_ignored(self):
         session = SimulatedSession('/unused', {})
         page = {'id': 'page', 'url': 'https://example.com/'}

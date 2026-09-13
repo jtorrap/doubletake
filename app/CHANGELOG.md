@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Fix an unresponsive Paste button when a proxy serves an older app script.
+- Give scripts and styles content-based filenames so updates load fresh controls.
+
 ## 0.1.1
 
 - Add a masked Paste dialog for passwords and other text.

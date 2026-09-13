@@ -8,6 +8,11 @@ const fs = require('fs');
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
+    // Reproduce a proxy retaining old unversioned assets, including queries.
+    // Updated HTML must request a different path and still open the dialog.
+    await page.route('**/static/app.js*', route => route.fulfill({
+      contentType:'text/javascript', body:'throw new Error("Stale cached script loaded")'
+    }));
     await page.goto(process.argv[2]);
     await page.waitForFunction(() => document.querySelector('#previewState').textContent.startsWith('Connected'), {timeout: 30000});
     const canvas = page.locator('#screen canvas');

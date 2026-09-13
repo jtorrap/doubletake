@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -56,6 +57,17 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     session = session_factory(directory, settings.get("quality", {"width": 1920, "height": 1080, "fps": 15, "bitrate": 6000, "hwaccel": "none"}))
     bridge = None
     novnc = Path(settings.get("novnc", "/usr/share/novnc"))
+    static = Path(__file__).parent / "static"
+    index_html = (static / "index.html").read_text()
+    assets = {}
+    # Some Ingress proxies retain static URLs even when no-store is sent and
+    # ignore query strings. Change the path whenever an asset's bytes change.
+    for name in ("app.js", "style.css"):
+        path = static / name
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        filename = f"{path.stem}.{digest}{path.suffix}"
+        assets[filename] = path
+        index_html = index_html.replace(f'"static/{name}"', f'"assets/{filename}"')
 
     @web.middleware
     async def boundary(request, handler):
@@ -90,7 +102,13 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     app["store"], app["session"], app["csrf"] = store, session, csrf
 
     async def index(_request):
-        return web.FileResponse(Path(__file__).parent / "static/index.html")
+        return web.Response(text=index_html, content_type="text/html")
+
+    async def asset(request):
+        path = assets.get(request.match_info["filename"])
+        if path is None:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
 
     async def state(_request):
         return web.json_response({**store.public(), "runtime": session.state(), "mqtt_connected": bool(bridge and bridge.connected), "csrf": csrf, "version": VERSION})
@@ -216,6 +234,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
 
     app.cleanup_ctx.append(lifecycle)
     app.router.add_get("/", index)
+    app.router.add_get("/assets/{filename}", asset)
     app.router.add_get("/healthz", state)
     app.router.add_get("/api/state", state)
     app.router.add_post("/api/settings/{kind}", put_item)

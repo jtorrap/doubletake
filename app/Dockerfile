@@ -23,7 +23,7 @@ COPY --from=engine /doubletake /usr/local/bin/doubletake
 COPY --from=engine /src/scripts/doubletake-browser /opt/doubletake/launcher.py
 COPY service/ /opt/browser-app/
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.1" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.2" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM
