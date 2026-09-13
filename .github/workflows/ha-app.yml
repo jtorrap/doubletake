@@ -38,7 +38,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           npm install --prefix /tmp/app-playwright playwright@1.58.2
-      - name: Real browser, interactive preview and AirPlay transport
+      - name: Native browser, interactive preview and AirPlay transport
+        run: python3 -B app/tests/integration.py
+      - name: Diagnostic-mode fallback and profile lifecycle
+        env:
+          DOUBLETAKE_TEST_CONTROL: diagnostic
         run: python3 -B app/tests/integration.py
       - uses: actions/upload-artifact@v4
         if: always()

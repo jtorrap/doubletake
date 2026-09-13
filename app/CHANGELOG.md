@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6
+
+- Use regular Chrome with native desktop controls by default, without a browser debugging channel.
+- Preserve Paste, saved-page navigation, history and clean profile reopening.
+- Hold the captured frame during address-bar navigation and guard input from concurrent preview clients.
+- Retain the private-pipe backend as the explicit diagnostic configuration option.
+- Keep GPU activity checks available; identify when detailed browser inspection is off.
+
 ## 0.1.5
 
 - Always report a dark color preference to websites.

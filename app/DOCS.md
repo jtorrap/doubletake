@@ -42,6 +42,18 @@ requires another explicit Show action; the app does not repeatedly reclaim a TV.
 Use the page's normal sign-in flow and trusted certificate configuration. The
 app does not bypass certificate errors or disable Chromium's sandbox.
 
+Version 0.1.6 defaults to **browser_control: native** in the app Configuration
+tab. This runs regular Chrome on the virtual display without a debugging channel.
+Paste uses native keyboard input. Saved-page navigation briefly holds the current
+frame while Chrome opens its address bar and returns to full screen; preview
+input is temporarily disabled during native control operations.
+
+The **diagnostic** setting restores the previous private debugging pipe for
+troubleshooting. Changing modes requires an app restart and retains the same
+browser profile, saved pages and receiver pairings. Google may reject automated
+browsers; native mode removes Chrome's automation flag but does not guarantee
+that a website accepts sign-in. Complete sign-in yourself through the preview.
+
 ## Home Assistant devices and automations
 
 Each saved TV appears through MQTT discovery as **TV name Browser**. It has:
@@ -75,7 +87,8 @@ zoom. Websites with automatic dark themes use that preference; a website's
 explicit theme setting can still take precedence. Per-site zoom overrides are
 retained. At 1080p, the output remains 1920 by 1080 pixels and the default page
 layout uses approximately 1600 by 900 CSS pixels. **Check video** includes the
-actual output resolution, page zoom, and reported color preference.
+actual output resolution. Detailed zoom and color-preference readback is available
+in diagnostic mode; standard mode does not attach a debugger to inspect pages.
 
 Hardware decoding is enabled by default when an accessible GPU is present.
 The app includes Intel's iHD VA-API driver and uses Supervisor's video device
@@ -87,7 +100,7 @@ requires an app restart. HEVC needs compatible GPU, driver, and browser support.
 While a camera is playing, choose **Check video** below the preview. Available
 profiles establish capability; **GPU video engine active** establishes activity
 during the sample. Technical details include video frame counters, browser
-decoder properties when available, and container-local DRM activity. If activity
+decoder properties in diagnostic mode, and container-local DRM activity. If activity
 cannot be observed, the check reports that it is unconfirmed. The check does not
 return page URLs, login fields, cookies, or raw browser logs.
 

@@ -22,6 +22,7 @@ import time
 from model import browser_text
 from acceleration import gpu_info, va_capabilities, video_engine_counters
 from browser_preferences import prepare_profile
+from native_control import browser_command as native_browser_command
 
 
 def load_engine():
@@ -105,6 +106,7 @@ class Worker:
         self.stop_event = asyncio.Event()
         self.stage = "dependencies"
         self.media = {}
+        self.native = config.get('control_mode', 'native') == 'native'
 
     def media_event(self, value):
         if value.get('method') != 'Media.playerPropertiesChanged':
@@ -125,7 +127,7 @@ class Worker:
 
     async def diagnostics(self):
         capabilities = await asyncio.to_thread(va_capabilities)
-        info = gpu_info(await self.cdp.call('SystemInfo.getInfo'))
+        info = gpu_info(await self.cdp.call('SystemInfo.getInfo')) if self.cdp else {}
         before = video_engine_counters()
         started = time.monotonic_ns()
         await asyncio.sleep(1)
@@ -152,9 +154,11 @@ class Worker:
               page_zoom_percent:Math.round(devicePixelRatio*100),
               prefers_dark:matchMedia('(prefers-color-scheme: dark)').matches}};
         })()'''
-        videos = await self.cdp.call('Runtime.evaluate', {'expression': expression, 'returnByValue': True}, self.page_session)
+        videos = await self.cdp.call('Runtime.evaluate', {'expression': expression, 'returnByValue': True}, self.page_session) if self.cdp else {}
         page = videos.get('result', {}).get('value', {})
         return {**capabilities, **info,
+                'control_mode': 'native' if self.native else 'diagnostic',
+                'browser_inspection_available': not self.native,
                 'display': {'width': self.engine_config['width'], 'height': self.engine_config['height'],
                             'fps': self.engine_config['fps'], **page.get('display', {})},
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
@@ -177,12 +181,20 @@ class Worker:
         Path(self.config["profile_dir"]).mkdir(mode=0o700, parents=True, exist_ok=True)
         self.stage = "display"
         self.display, self.environment = self.engine.start_display(self.engine_config, runtime)
+        if self.native:
+            self.environment['DBUS_SESSION_BUS_ADDRESS'] = os.environ['DBUS_SESSION_BUS_ADDRESS']
+            self.environment['ACCESSIBILITY_ENABLED'] = '1'
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
         prepare_profile(Path(self.config['profile_dir']) / 'profile')
-        self.browser, self.command_fd, self.response_fd = self.engine.start_browser(self.engine_config, bootstrap, self.environment)
-        self.cdp = CDP(self.command_fd, self.response_fd, self.media_event)
+        if self.native:
+            self.browser = subprocess.Popen(native_browser_command(self.engine, self.engine_config, bootstrap),
+                                            env=self.environment, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL, start_new_session=True)
+        else:
+            self.browser, self.command_fd, self.response_fd = self.engine.start_browser(self.engine_config, bootstrap, self.environment)
+            self.cdp = CDP(self.command_fd, self.response_fd, self.media_event)
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
@@ -200,12 +212,13 @@ class Worker:
         for operation in [["windowsize", str(self.window), str(self.engine_config["width"]), str(self.engine_config["height"])], ["windowmove", str(self.window), "0", "0"]]:
             subprocess.run([self.engine_config["executables"]["xdotool"], *operation], env=self.environment, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
         self.stage = "browser control"
-        targets = await self.cdp.call("Target.getTargets")
-        page = next(t for t in targets["targetInfos"] if t["type"] == "page")
-        attached = await self.cdp.call("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})
-        self.page_session = attached["sessionId"]
-        with contextlib.suppress(RuntimeError, asyncio.TimeoutError):
-            await self.cdp.call('Media.enable', session=self.page_session)
+        if self.cdp:
+            targets = await self.cdp.call("Target.getTargets")
+            page = next(t for t in targets["targetInfos"] if t["type"] == "page")
+            attached = await self.cdp.call("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})
+            self.page_session = attached["sessionId"]
+            with contextlib.suppress(RuntimeError, asyncio.TimeoutError):
+                await self.cdp.call('Media.enable', session=self.page_session)
         # This file and the control channel remain private; no VNC password
         # appears in process arguments, logs, MQTT, or persistent settings.
         self.stage = "preview"
@@ -262,8 +275,27 @@ class Worker:
             emit("airplay", state="sending")
             self.sender_buffer = ""
 
+    async def native_command(self, action, **fields):
+        process = await asyncio.create_subprocess_exec(sys.executable, '-B', str(Path(__file__).with_name('native_control.py')),
+                    env=self.environment, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(json.dumps(
+                {'action':action, 'window':self.window, 'pid':self.browser.pid, **fields}).encode()), 35)
+            result = json.loads(output)
+            if not result.get('ok'):
+                raise RuntimeError('native_control_failed')
+        finally:
+            fields.clear()
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
     async def command(self, value):
         action = value["action"]
+        if self.native and action in {'navigate', 'back', 'forward', 'reload', 'insert_text'}:
+            fields = {'url':value['url']} if action == 'navigate' else {'value':value['value']} if action == 'insert_text' else {}
+            return await self.native_command(action, **fields)
         if action == "diagnostics":
             return await self.diagnostics()
         elif action == "navigate":
@@ -342,12 +374,19 @@ class Worker:
 
     async def close(self):
         self.stop_sender()
+        if self.native and self.browser and self.browser.poll() is None and self.window:
+            with contextlib.suppress(Exception):
+                await self.native_command('close')
+                await asyncio.to_thread(self.browser.wait, timeout=8)
         self.engine.stop(self.vnc)
         if self.cdp:
             with contextlib.suppress(Exception):
                 await self.cdp.call("Browser.close")
             self.cdp.close()
-        self.engine.close_browser(self.browser, self.command_fd)
+        if self.native:
+            self.engine.stop(self.browser)
+        else:
+            self.engine.close_browser(self.browser, self.command_fd)
         for fd in [self.command_fd, self.response_fd]:
             if fd is not None:
                 os.close(fd)

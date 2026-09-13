@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('fixture', ROOT / 'scripts/browser-smoke.py')
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
-ARTIFACTS = ROOT / 'artifacts/app'
+CONTROL = os.environ.get('DOUBLETAKE_TEST_CONTROL', 'native')
+ARTIFACTS = ROOT / 'artifacts/app' / CONTROL
 csrf = ''
 PORT = fixture.free_port()
 BASE = f'http://127.0.0.1:{PORT}'
@@ -55,6 +56,8 @@ class Fixture(fixture.Fixture):
 def main():
     global csrf
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    fixture.PAGE = fixture.PAGE.replace(b'profileToken,hadProfile,hadCookie', b'''profileToken,hadProfile,hadCookie,path:location.pathname,webdriver:navigator.webdriver,
+      css_width:innerWidth,css_height:innerHeight,zoom:Math.round(devicePixelRatio*100),dark:matchMedia('(prefers-color-scheme: dark)').matches''')
     fixture.PAGE += b'''<input id="entry" style="position:fixed;left:32px;top:550px;width:350px;height:40px;font-size:24px" placeholder="Test remote keyboard">
 <button style="position:fixed;left:32px;top:615px;width:250px;height:45px;font-size:24px" onclick="fetch('/input',{method:'POST',body:JSON.stringify({clicked:true,typed:document.querySelector('#entry').value})})">Test remote click</button>'''
     receiver = None
@@ -74,7 +77,7 @@ def main():
             with log.open('w') as output:
                 receiver = subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{receiver_port}', '-profile', 'uxplay', '-stats-interval', '1s'], stdout=output, stderr=subprocess.STDOUT)
             fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
-            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-v', f'{state}:/data/doubletake', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
+            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
             def ready():
                 try:
                     return api('/api/state')
@@ -88,10 +91,16 @@ def main():
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
             diagnostics = api('/api/diagnostics', {})
-            assert diagnostics['display'] == {'width':1920, 'height':1080, 'fps':15,
+            expected_display = {'width':1920, 'height':1080, 'fps':15}
+            if CONTROL == 'diagnostic':
+                expected_display.update({
                                               'css_width':1600, 'css_height':900,
-                                              'page_zoom_percent':120, 'prefers_dark':True}, diagnostics['display']
-            assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
+                                              'page_zoom_percent':120, 'prefers_dark':True})
+                assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
+            assert diagnostics['display'] == expected_display, diagnostics['display']
+            metrics = fixture.Fixture.metrics
+            assert metrics['webdriver'] == (CONTROL == 'diagnostic'), metrics
+            assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1600,900,120,True)
             assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
             fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
@@ -99,6 +108,17 @@ def main():
             fixture.wait_for(lambda: api('/api/state')['runtime']['airplay'] == 'sending', 30, 'AirPlay readiness')
             fixture.wait_for(lambda: max([int(v) for v in re.findall(r'video=(\d+)/', log.read_text())] or [0]) >= 30, 30, 'AirPlay packets')
             assert fixture.Fixture.metrics['videoWidth'] == 640
+            second = api('/api/settings/pages', {'name':'Second page', 'url':f'http://127.0.0.1:{server.server_port}/second'})
+            before_packets = max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text()))
+            api('/api/action/open', {'page_id':second['id']})
+            fixture.wait_for(lambda: fixture.Fixture.metrics.get('path') == '/second', 10, 'native URL navigation')
+            assert api('/api/state')['runtime']['tv_id'] == tv['id'], 'Navigation changed the receiver'
+            fixture.wait_for(lambda: max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())) > before_packets + 15, 15, 'uninterrupted sender across navigation')
+            for action, path in [('back','/'), ('forward','/second')]:
+                api('/api/action/browser', {'action':action})
+                fixture.wait_for(lambda: fixture.Fixture.metrics.get('path') == path, 10, action)
+            api('/api/action/browser', {'action':'reload'})
+            assert fixture.Fixture.metrics['webdriver'] == (CONTROL == 'diagnostic')
             api('/api/action/stop', {})
             assert api('/api/state')['runtime']['browser'] == 'ready', 'Stop closed browser'
             api('/api/action/close', {})
@@ -111,7 +131,9 @@ def main():
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake']), processes
-            result = {'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
+            result = {'control_mode':CONTROL, 'webdriver':fixture.Fixture.metrics['webdriver'],
+                      'native_navigation_and_history':True, 'sender_survives_navigation':True,
+                      'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
                       'masked_clipboard_paste_preserves_unicode_and_punctuation': True, 'paste_dialog_cleared': True,
                       'browser_version': subprocess.check_output(['docker', 'exec', 'doubletake-integration', 'google-chrome', '--version'], text=True).strip(),
                       'airplay_video_packets': max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())), 'profile_and_cookie_retained': True,

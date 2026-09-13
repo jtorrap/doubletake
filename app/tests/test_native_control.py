@@ -1,0 +1,45 @@
+import contextlib
+from pathlib import Path
+import sys
+import unittest
+from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
+import native_control as native
+
+
+class NativeControls(unittest.TestCase):
+    def test_launch_has_no_debugging_or_automation_flag(self):
+        engine = Mock()
+        engine.browser_command.return_value = ['chrome', '--remote-debugging-pipe', '--kiosk', '--app=file:///fixture', '--user-data-dir=/private/profile', '--force-device-scale-factor=1']
+        command = native.browser_command(engine, {}, Path('/fixture'))
+        self.assertNotIn('--remote-debugging-pipe', command)
+        self.assertNotIn('--kiosk', command)
+        self.assertIn('--user-data-dir=/private/profile', command)
+        self.assertIn('--start-fullscreen', command)
+        self.assertFalse(any(value.startswith(('--headless','--enable-automation','--remote-debugging-port')) for value in command))
+
+    def test_paste_preserves_selection_and_never_submits(self):
+        with patch.object(native, 'xdo', side_effect=lambda *args, **kw: '42' if args[0]=='getwindowpid' else '7' if args[0]=='getwindowfocus' else '') as xdo, patch.object(native, 'preview_readonly') as guard:
+            native.perform({'action':'insert_text','pid':42,'window':7,'value':'Unicode 🔐 & quotes'})
+            typed = [c for c in xdo.call_args_list if c.args[0] == 'type']
+            self.assertEqual(len(typed), 1)
+            self.assertEqual(typed[0].kwargs['text'], 'Unicode 🔐 & quotes')
+            self.assertNotIn('Unicode', repr(typed[0].args))
+            self.assertFalse(any('Return' in c.args or 'ctrl+a' in c.args for c in xdo.call_args_list))
+            self.assertEqual([c.args[0] for c in guard.call_args_list], [True, False])
+
+    def test_unconfirmed_address_bar_does_not_receive_url_or_enter(self):
+        with patch.object(native, 'xdo', side_effect=lambda *args, **kw: '42' if args[0]=='getwindowpid' else '7' if args[0]=='getwindowfocus' else '') as xdo, patch.object(native, 'preview_readonly') as guard, patch.object(native, 'ChromeUI') as ui, patch.object(native, 'frozen_frame', return_value=contextlib.nullcontext()), patch.object(native, 'wait_for', side_effect=RuntimeError('unconfirmed')):
+            ui.return_value.address.return_value = None
+            with self.assertRaises(RuntimeError):
+                native.perform({'action':'navigate','pid':42,'window':7,'url':'https://example.com/'})
+            self.assertFalse(any(c.args[0] == 'type' or 'Return' in c.args for c in xdo.call_args_list))
+            self.assertEqual([c.args[0] for c in guard.call_args_list], [True, False])
+
+    def test_wrong_window_never_enables_or_types_controls(self):
+        with patch.object(native, 'xdo', return_value='99') as xdo, patch.object(native, 'preview_readonly') as guard:
+            with self.assertRaises(RuntimeError):
+                native.perform({'action':'insert_text','pid':42,'window':7,'value':'fixture'})
+            guard.assert_not_called()
+            self.assertEqual(xdo.call_count, 1)

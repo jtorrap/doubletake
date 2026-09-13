@@ -57,7 +57,7 @@ async function refresh() {
   state = await api('api/state', undefined, 'GET'); csrf = state.csrf;
   options($('pageChoice'),state.pages,'Add a page below'); options($('tvChoice'),state.tvs,'Add a TV below');
   renderItems('pages'); renderItems('tvs');
-  $('version').textContent = `Doubletake Browser ${state.version}`;
+  $('version').textContent = `Doubletake Browser ${state.version} · ${state.runtime.control_mode==='native'?'Standard browser':'Diagnostic browser'}`;
   $('mqttState').textContent = state.mqtt_connected?'Home Assistant connected':'Home Assistant controls reconnecting';
   $('mqttState').className = `badge ${state.mqtt_connected?'good':'wait'}`;
   const current=state.runtime, tv=state.tvs.find(item=>item.id===current.tv_id), page=state.pages.find(item=>item.id===current.page_id);
@@ -154,6 +154,8 @@ $('checkVideo').onclick=()=>run(async()=>{
   $('videoDialog').showModal();
   try {
     const result=await api('api/diagnostics',{});
+    $('videoScope').textContent=result.browser_inspection_available?'Browser video details are available.':
+      'Standard browser mode checks the GPU driver and activity. Detailed page and decoder inspection is available in diagnostic mode.';
     $('videoSummary').textContent=result.video_engine_active?'GPU video engine active':
       !result.hardware_decoding_enabled?'Hardware decoding is switched off':
       !result.render_nodes.length?'No accessible GPU found':

@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && apt-get update && apt-get install -y --no-install-recommends \
        google-chrome-stable python3 python3-aiohttp python3-paho-mqtt python3-zeroconf \
        xvfb xauth xdotool x11vnc novnc fonts-dejavu-core fonts-liberation \
+       dbus-x11 at-spi2-core python3-pyatspi python3-xlib \
        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     && rm -rf /var/lib/apt/lists/* \
@@ -29,7 +30,7 @@ COPY service/ /opt/browser-app/
 RUN chmod 755 /opt/browser-app/acceleration.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.5" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.6" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

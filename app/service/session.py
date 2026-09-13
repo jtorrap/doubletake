@@ -18,10 +18,13 @@ class Session:
         self.sequence = 0
         self.pending = {}
         self.lock = asyncio.Lock()
+        self.control_mode = os.environ.get('DOUBLETAKE_BROWSER_CONTROL', 'native')
+        if self.control_mode not in {'native', 'diagnostic'}:
+            raise ValueError('Unknown browser control mode')
         self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "error": None}
 
     def state(self):
-        return dict(self.runtime)
+        return {**self.runtime, 'control_mode': self.control_mode}
 
     def update(self, **fields):
         self.runtime.update(fields)
@@ -70,7 +73,7 @@ class Session:
             return False
         await self.close_worker()
         self.update(browser="starting", error=None)
-        config = {"url": page["url"], "quality": self.quality,
+        config = {"url": page["url"], "quality": self.quality, "control_mode": self.control_mode,
                   "profile_dir": str(self.directory / "browser"), "receivers_dir": str(self.directory / "receivers")}
         if os.environ.get("DOUBLETAKE_BROWSER"):
             config["browser"] = os.environ["DOUBLETAKE_BROWSER"]
@@ -82,7 +85,10 @@ class Session:
         # the page-rendering process or its browser/encoder children.
         env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
-        self.process = await asyncio.create_subprocess_exec(sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
+        command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
+        if self.control_mode == 'native':
+            command = ['dbus-run-session', '--', *command]
+        self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
         self.reader_task = asyncio.create_task(self.read_events(self.process))
         try:
             await asyncio.wait_for(asyncio.shield(self.ready), 50)
@@ -105,7 +111,7 @@ class Session:
         try:
             self.process.stdin.write(json.dumps({"id": message_id, "action": action, **fields}).encode() + b"\n")
             await self.process.stdin.drain()
-            return await asyncio.wait_for(future, 30 if action == "diagnostics" else 15)
+            return await asyncio.wait_for(future, 40)
         except (BrokenPipeError, ConnectionError, asyncio.TimeoutError):
             raise ValueError("The browser did not respond") from None
         finally:
@@ -155,8 +161,9 @@ class Session:
         process = self.process
         if process:
             if process.returncode is None:
-                with contextlib.suppress(ProcessLookupError):
-                    process.send_signal(signal.SIGTERM)
+                # Ask the worker to flush Chrome before dbus-run-session exits.
+                with contextlib.suppress(ValueError, OSError):
+                    await self.request('close')
                 try:
                     await asyncio.wait_for(process.wait(), 45)
                 except asyncio.TimeoutError:

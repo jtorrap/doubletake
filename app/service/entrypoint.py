@@ -47,6 +47,7 @@ def main():
     os.setuid(1000)
     keep = {key: os.environ[key] for key in ("PATH", "LANG", "TZ") if key in os.environ}
     keep.update(HOME="/home/browser", DOUBLETAKE_BROWSER="/opt/browser-app/acceleration.py",
+                DOUBLETAKE_BROWSER_CONTROL=options.get('browser_control', 'native'),
                 DOUBLETAKE_HARDWARE_DECODING="true" if options.get("hardware_decoding", True) else "false")
     os.environ.clear()
     os.environ.update(keep)
