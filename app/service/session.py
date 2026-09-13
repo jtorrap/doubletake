@@ -47,7 +47,9 @@ class Session:
                     if value.get("state") in {"pairing", "sending", "error"}:
                         self.update(airplay=value["state"], error="The TV connection ended. Try Show again." if value["state"] == "error" else None)
                 elif value.get("type") == "fatal":
-                    self.update(browser="error", airplay="error" if self.runtime["tv_id"] else "idle", error="The browser session could not run. Check app health and browser sandbox support.")
+                    stage = value.get("stage")
+                    detail = " (" + stage + ")" if stage in {"dependencies", "display", "browser", "browser control", "preview"} else ""
+                    self.update(browser="error", airplay="error" if self.runtime["tv_id"] else "idle", error="The browser session could not run" + detail + ". Check app health and browser sandbox support.")
                     if not self.ready.done():
                         self.ready.set_exception(ValueError("The browser could not start"))
         except (OSError, ValueError, KeyError, TypeError):
@@ -65,7 +67,7 @@ class Session:
 
     async def ensure(self, page):
         if self.process and self.process.returncode is None and self.preview:
-            return
+            return False
         await self.close_worker()
         self.update(browser="starting", error=None)
         config = {"url": page["url"], "quality": self.quality,
@@ -86,11 +88,12 @@ class Session:
             await asyncio.wait_for(asyncio.shield(self.ready), 50)
         except (ValueError, asyncio.TimeoutError):
             await self.close_worker()
-            self.update(browser="error", error="The browser could not start. Check app health and sandbox support.")
+            self.update(browser="error", error=self.runtime["error"] or "The browser could not start. Check app health and sandbox support.")
             raise ValueError("The browser could not start") from None
         finally:
             with contextlib.suppress(FileNotFoundError):
                 path.unlink()
+        return True
 
     async def request(self, action, **fields):
         if not self.process or self.process.returncode is not None:
@@ -108,10 +111,13 @@ class Session:
         finally:
             self.pending.pop(message_id, None)
 
-    async def open(self, page, receiver=None):
+    async def open(self, page, receiver=None, *, preserve_view=False):
         async with self.lock:
-            await self.ensure(page)
-            await self.request("navigate", url=page["url"])
+            created = await self.ensure(page)
+            # The UI's Show action sends the view the user is interacting with.
+            # MQTT launch buttons always open their configured URL explicitly.
+            if not created and not (preserve_view and self.runtime["page_id"] == page["id"]):
+                await self.request("navigate", url=page["url"])
             self.update(page_id=page["id"], error=None)
             if receiver and (self.runtime["tv_id"] != receiver["id"] or self.runtime["airplay"] not in {"starting", "pairing", "sending"}):
                 # One sender is replaced only after the prior one stops.

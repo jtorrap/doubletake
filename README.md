@@ -2,6 +2,11 @@
 
 ## Headless browser fork
 
+**Home Assistant app:** [Doubletake Browser](app/) adds an interactive Ingress
+preview, saved pages and Apple TVs, and MQTT launch buttons. The first release
+runs one persistent browser and one active TV connection on amd64 HA hosts.
+See the [installation and usage guide](app/DOCS.md).
+
 This fork adds **`doubletake-browser`** to send a web dashboard from a headless
 Linux VM. It manages an isolated Chromium/Xvfb session and uses the existing
 doubletake AirPlay sender to stream only that browser window, including live

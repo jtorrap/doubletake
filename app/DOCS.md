@@ -1,5 +1,10 @@
 # Using Doubletake Browser
 
+In **Settings → Apps → App store → Repositories**, add
+`https://github.com/jtorrap/doubletake`. Install **Doubletake Browser**.
+The initial source installation compiles the pinned sender and downloads Chrome,
+so allow several minutes for the Supervisor build job to finish.
+
 Install and start the app, then choose **Open web UI** or use its sidebar entry.
 The app uses your existing Home Assistant authentication through Ingress.
 It obtains the MQTT broker connection from Supervisor automatically.
@@ -19,6 +24,9 @@ Choose a TV and **Show on TV** to send the same browser window. If the receiver
 requests a pairing code or configured AirPlay password, enter it in the app.
 Codes are passed privately and are not saved in settings or logs. Receiver
 pairing credentials are stored separately for each saved TV.
+
+Show preserves your current interaction when the same saved page is selected.
+Open browser and Home Assistant launch buttons navigate to the saved URL.
 
 Switching TVs stops the prior sender and connects the selected receiver.
 **Stop** keeps the browser open. **Close browser** stops both. A receiver error

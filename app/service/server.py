@@ -132,7 +132,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         if operation in {"open", "cast"}:
             page = store.get("pages", body.get("page_id"))
             tv = store.get("tvs", body.get("tv_id")) if operation == "cast" else None
-            await session.open(page, tv)
+            await session.open(page, tv, preserve_view=operation == "cast")
         elif operation == "stop":
             await session.stop()
         elif operation == "close":

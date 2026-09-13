@@ -52,6 +52,8 @@ class SimulatedSession(Session):
             self.starts += 1
             self.process = SimpleNamespace(returncode=None)
             self.update(browser='ready')
+            return True
+        return False
 
     async def request(self, action, **fields):
         self.commands.append((action, fields))
@@ -101,6 +103,15 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.post('/api/action/pin', json={'value': '1234'})).status, 400)
             finally:
                 await client.close()
+
+    async def test_ui_cast_preserves_interaction_but_mqtt_reopens_saved_url(self):
+        session = SimulatedSession('/unused', {})
+        page = {'id': 'page', 'url': 'https://example.com/'}
+        await session.open(page)
+        await session.open(page, {'id': 'tv'}, preserve_view=True)
+        self.assertNotIn('navigate', [action for action, _ in session.commands])
+        await session.open(page, {'id': 'tv'})
+        self.assertEqual(session.commands[-1], ('navigate', {'url': page['url']}))
 
     async def test_mqtt_ignores_retained_commands_and_cleans_only_owned_topics(self):
         with tempfile.TemporaryDirectory() as directory, patch('mqtt_bridge.mqtt.Client') as factory:

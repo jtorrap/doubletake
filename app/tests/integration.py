@@ -102,9 +102,10 @@ def main():
             assert fixture.Fixture.metrics['profileToken'] == token
             assert fixture.Fixture.metrics['hadProfile'] and fixture.Fixture.metrics['hadCookie']
             api('/api/action/close', {})
-            processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'comm'], text=True)
+            processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake']), processes
             result = {'sandbox_enabled': True, 'video_decoded': True, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
+                      'browser_version': subprocess.check_output(['docker', 'exec', 'doubletake-integration', 'google-chrome', '--version'], text=True).strip(),
                       'airplay_video_packets': max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())), 'profile_and_cookie_retained': True,
                       'stop_preserves_browser': True, 'close_cleans_processes': True, 'real_apple_tv_tested': False}
             (ARTIFACTS / 'result.json').write_text(json.dumps(result, indent=2))

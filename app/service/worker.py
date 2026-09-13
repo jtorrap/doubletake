@@ -97,6 +97,7 @@ class Worker:
         self.page_session = None
         self.sender_buffer = ""
         self.stop_event = asyncio.Event()
+        self.stage = "dependencies"
 
     async def start(self, runtime):
         args = self.engine.arguments(["--url", self.config["url"], "--setup", "--state-dir", self.config["profile_dir"]])
@@ -109,9 +110,11 @@ class Worker:
         # No production sandbox-disable switch is accepted by this worker.
         self.engine_config["no_browser_sandbox"] = False
         Path(self.config["profile_dir"]).mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.stage = "display"
         self.display, self.environment = self.engine.start_display(self.engine_config, runtime)
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
+        self.stage = "browser"
         self.browser, self.command_fd, self.response_fd = self.engine.start_browser(self.engine_config, bootstrap, self.environment)
         self.cdp = CDP(self.command_fd, self.response_fd)
         deadline = time.monotonic() + 35
@@ -130,12 +133,14 @@ class Worker:
             raise RuntimeError("browser_window_missing")
         for operation in [["windowsize", str(self.window), str(self.engine_config["width"]), str(self.engine_config["height"])], ["windowmove", str(self.window), "0", "0"]]:
             subprocess.run([self.engine_config["executables"]["xdotool"], *operation], env=self.environment, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        self.stage = "browser control"
         targets = await self.cdp.call("Target.getTargets")
         page = next(t for t in targets["targetInfos"] if t["type"] == "page")
         attached = await self.cdp.call("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})
         self.page_session = attached["sessionId"]
         # This file and the control channel remain private; no VNC password
         # appears in process arguments, logs, MQTT, or persistent settings.
+        self.stage = "preview"
         password = secrets.token_urlsafe(6)
         password_file = Path(runtime) / "vnc-password"
         password_file.write_text(password + "\n")
@@ -283,7 +288,7 @@ async def main():
             tasks = [asyncio.create_task(worker.commands()), asyncio.create_task(worker.monitor())]
             await worker.stop_event.wait()
         except Exception:
-            emit("fatal", code="browser_start_failed")
+            emit("fatal", code="browser_start_failed", stage=worker.stage)
         finally:
             for task in tasks:
                 task.cancel()
