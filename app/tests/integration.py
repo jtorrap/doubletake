@@ -145,6 +145,10 @@ def main():
             (ARTIFACTS / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result, indent=2))
         except Exception:
+            if CONTROL == 'native':
+                with contextlib.suppress(Exception):
+                    inspection = subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/native_runtime.py','--inspect'],text=True,timeout=15)
+                    (ARTIFACTS/'native-ui.json').write_text(inspection)
             with contextlib.suppress(Exception):
                 print(json.dumps({'failure_runtime':api('/api/state')['runtime']}))
             with contextlib.suppress(Exception):

@@ -14,7 +14,7 @@ def main():
     for process in Path('/proc').glob('[0-9]*'):
         try:
             command = (process/'cmdline').read_bytes().split(b'\0')
-            if b'--class=DoubletakeBrowser' in command:
+            if b'--class=DoubletakeBrowser' in command and not any(part.startswith(b'--type=') for part in command):
                 candidates.append((process, command))
         except OSError:
             pass
@@ -24,6 +24,21 @@ def main():
     environment = dict(part.split(b'=',1) for part in (process/'environ').read_bytes().split(b'\0') if b'=' in part)
     for name in ('DISPLAY','XAUTHORITY','DBUS_SESSION_BUS_ADDRESS','XDG_RUNTIME_DIR','AT_SPI_BUS_ADDRESS'):
         os.environ[name] = environment[name.encode()].decode()
+    if '--inspect' in sys.argv:
+        import pyatspi
+        rows, queue = [], [(app,0) for app in pyatspi.Registry.getDesktop(0) if app]
+        while queue and len(rows) < 150:
+            node, depth = queue.pop(0)
+            role = node.getRole()
+            states = node.getState()
+            if role in {pyatspi.ROLE_DOCUMENT_WEB, pyatspi.ROLE_DOCUMENT_FRAME, pyatspi.ROLE_EMBEDDED}:
+                continue
+            rows.append({'depth':depth,'role':node.getRoleName(),'name':node.name[:100],
+                         'pid':node.get_process_id(),'showing':states.contains(pyatspi.STATE_SHOWING),
+                         'editable':states.contains(pyatspi.STATE_EDITABLE),'focused':states.contains(pyatspi.STATE_FOCUSED)})
+            queue.extend((child,depth+1) for child in node if child)
+        print(json.dumps(rows))
+        return
     assert os.environ['DBUS_SESSION_BUS_ADDRESS'].startswith('unix:path='+os.environ['XDG_RUNTIME_DIR']+'/')
     assert accessibility_address(os.environ).startswith('unix:path='+os.environ['XDG_RUNTIME_DIR']+'/')
     connection = display.Display()

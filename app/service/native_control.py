@@ -66,10 +66,17 @@ class ChromeUI:
 
     def address(self, focused=False):
         spi = self.spi
+        from gi.repository import GLib
+        context = GLib.MainContext.default()
+        for _ in range(100):
+            if not context.pending():
+                break
+            context.iteration(False)
         # Inspect only the native browser UI, never descend into web documents.
         queue = []
         for app in spi.Registry.getDesktop(0):
             if app and app.get_process_id() == self.pid:
+                app.clear_cache()
                 queue.append((app, False))
         visited = 0
         while queue and visited < 1000:
