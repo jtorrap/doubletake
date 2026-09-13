@@ -1,0 +1,23 @@
+[Unit]
+Description=Home dashboard browser over AirPlay
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=doubletake-browser
+Group=doubletake-browser
+StateDirectory=doubletake-browser
+StateDirectoryMode=0700
+UMask=0077
+EnvironmentFile=/etc/doubletake-browser/environment
+ExecStart=/usr/local/bin/doubletake-browser --url-file /etc/doubletake-browser/url --target ${DOUBLETAKE_TARGET} --state-dir /var/lib/doubletake-browser
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

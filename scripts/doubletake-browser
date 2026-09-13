@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+"""Run one browser on a private Xvfb display and send it with doubletake.
+
+The AirPlay implementation stays in doubletake. No browser/CDP service is
+exposed during normal streaming. See docs/headless-browser.md for setup.
+"""
+
+import argparse
+import contextlib
+import fcntl
+import html
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.parse import urlsplit
+
+
+class Stopping(Exception):
+    pass
+
+
+def arguments(argv):
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--url", help="HTTP(S) dashboard URL; use --url-file for a private URL")
+    source.add_argument("--url-file", type=Path, help="file containing the dashboard URL")
+    parser.add_argument("--target", help="explicit Apple TV address (required when streaming)")
+    parser.add_argument("--port", type=int, default=7000)
+    parser.add_argument("--width", type=int, default=1920)
+    parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--bitrate", type=int, default=6000, help="video bitrate in kbps")
+    parser.add_argument("--hwaccel", choices=["auto", "none", "vaapi", "nvenc", "openh264"], default="auto")
+    parser.add_argument("--browser", help="Chromium-compatible executable")
+    parser.add_argument("--sender", default="doubletake", help="doubletake executable")
+    parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "doubletake-browser")
+    parser.add_argument("--pair", action="store_true", help="explicitly request new AirPlay pairing")
+    parser.add_argument("--setup", action="store_true", help="browser sign-in through loopback VNC; does not contact a TV")
+    parser.add_argument("--setup-port", type=int, default=5900)
+    parser.add_argument("--check", action="store_true", help="validate configuration and dependencies, then exit")
+    # Only for restricted test/container environments. Never silently disable
+    # Chromium's sandbox because a launch failed.
+    parser.add_argument("--no-browser-sandbox", action="store_true", help="explicitly disable Chromium sandbox (isolated test environments only)")
+    args = parser.parse_args(argv)
+    if not args.url and not args.url_file:
+        parser.error("provide --url or --url-file")
+    if args.url_file:
+        try:
+            args.url = args.url_file.read_text().strip()
+        except OSError:
+            parser.error("cannot read --url-file")
+    try:
+        url = urlsplit(args.url)
+        valid = url.scheme in {"http", "https"} and url.hostname and not url.username and not url.password
+        valid = valid and not any(c.isspace() or ord(c) < 32 for c in args.url)
+        _ = url.port
+    except ValueError:
+        valid = False
+    if not valid:
+        parser.error("dashboard URL must be HTTP(S), without embedded credentials or whitespace")
+    if not args.setup and not args.target:
+        parser.error("provide --target; discovery is intentionally not automatic")
+    if args.setup and args.pair:
+        parser.error("--setup does not pair with a TV; omit --pair")
+    if not (1 <= args.port <= 65535 and 1 <= args.setup_port <= 65535):
+        parser.error("ports must be in 1..65535")
+    if not (320 <= args.width <= 3840 and 240 <= args.height <= 2160 and args.width % 2 == 0 and args.height % 2 == 0):
+        parser.error("use even dimensions between 320x240 and 3840x2160")
+    if not (1 <= args.fps <= 60 and 500 <= args.bitrate <= 50000):
+        parser.error("fps must be 1..60; bitrate must be 500..50000 kbps")
+    return args
+
+
+def executable(name):
+    path = shutil.which(name)
+    if path is None:
+        raise RuntimeError(f"missing executable: {Path(name).name}")
+    return str(Path(path).resolve())
+
+
+def dependencies(args):
+    browser = args.browser or next((n for n in ["chromium", "chromium-browser", "google-chrome"] if shutil.which(n)), None)
+    if browser is None:
+        raise RuntimeError("install Chromium or specify --browser")
+    result = {"browser": executable(browser), "xvfb": executable("xvfb-run"), "xdotool": executable("xdotool")}
+    executable("Xvfb")
+    executable("xauth")
+    if args.setup:
+        result["vnc"] = executable("x11vnc")
+    else:
+        result["sender"] = executable(args.sender)
+        executable("gst-launch-1.0")
+        inspect = executable("gst-inspect-1.0")
+        for plugin in ["ximagesrc", "h264parse"]:
+            if subprocess.run([inspect, plugin], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode:
+                raise RuntimeError(f"missing GStreamer element: {plugin}")
+    return result
+
+
+def isolated_environment(base, runtime):
+    env = dict(base)
+    for name in ["DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "PULSE_SERVER", "CHROME_REMOTE_DESKTOP_SESSION"]:
+        env.pop(name, None)
+    env["XDG_RUNTIME_DIR"] = str(runtime)
+    return env
+
+
+def browser_command(config, bootstrap):
+    return [config["executables"]["browser"],
+            "--ozone-platform=x11", "--class=DoubletakeBrowser",
+            "--user-data-dir=" + str(Path(config["state_dir"]) / "profile"),
+            "--window-size=" + str(config["width"]) + "," + str(config["height"]),
+            "--window-position=0,0", "--force-device-scale-factor=1",
+            "--kiosk", "--no-first-run", "--no-default-browser-check",
+            "--disable-session-crashed-bubble", "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+            "--autoplay-policy=no-user-gesture-required",
+            *( ["--no-sandbox"] if config["no_browser_sandbox"] else [] ),
+            "--app=" + bootstrap.as_uri()]
+
+
+def sender_command(config, window):
+    cmd = [config["executables"]["sender"], "-target", config["target"],
+           "-port", str(config["port"]), "-fps", str(config["fps"]),
+           "-bitrate", str(config["bitrate"]), "-hwaccel", config["hwaccel"],
+           "-video-codec", "h264", "-no-audio", "-no-cursor",
+           "-x11-window-id", str(window),
+           "-creds", str(Path(config["state_dir"]) / "airplay-credentials.json")]
+    if config["pair"]:
+        cmd.append("-pair")
+    return cmd
+
+
+def stop(process, group=True):
+    if process is None:
+        return
+    # The xvfb-run worker owns one group containing the virtual display,
+    # browser children, and sender/encoder. Never kill by executable name.
+    with contextlib.suppress(ProcessLookupError):
+        (os.killpg if group else os.kill)(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=4)
+    except subprocess.TimeoutExpired:
+        pass
+    # The wrapper can exit before its children finish shutting down. Allow
+    # them to flush the profile before enforcing cleanup of the owned group.
+    if group:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+    with contextlib.suppress(ProcessLookupError):
+        (os.killpg if group else os.kill)(process.pid, signal.SIGKILL)
+    process.wait(timeout=4)
+
+
+def write_status(state_dir, **values):
+    target = Path(state_dir) / "status.json"
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(values) + "\n")
+    tmp.chmod(0o600)
+    tmp.replace(target)
+
+
+def stopping(_signum, _frame):
+    raise Stopping()
+
+
+def session(config_path):
+    config = json.loads(Path(config_path).read_text())
+    browser = sender = vnc = None
+    try:
+        bootstrap = Path(config_path).with_name("launch.html")
+        # Keep private dashboard URLs out of Chromium's process arguments and
+        # logs. Only this mode-0600 local bootstrap contains the destination.
+        bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(config["url"], quote=True) + '"><title>Opening dashboard</title>')
+        browser_env = dict(os.environ)
+        browser_env.pop("DOUBLETAKE_CODE", None)
+        browser = subprocess.Popen(browser_command(config, bootstrap), env=browser_env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 40
+        window = None
+        while time.monotonic() < deadline:
+            if browser.poll() is not None:
+                raise RuntimeError("Chromium exited before creating its window; check the installed browser and sandbox support")
+            found = subprocess.run([config["executables"]["xdotool"], "search", "--onlyvisible", "--class", "^DoubletakeBrowser$"],
+                                   capture_output=True, text=True, timeout=3)
+            candidates = found.stdout.split()
+            if found.returncode == 0 and len(candidates) == 1 and candidates[0].isdigit():
+                window = int(candidates[0])
+                break
+            time.sleep(0.2)
+        if window is None:
+            raise RuntimeError("timed out waiting for exactly one browser window")
+        # Xvfb has no window manager. Give the owned window exact geometry.
+        subprocess.run([config["executables"]["xdotool"], "windowsize", str(window), str(config["width"]), str(config["height"])], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        subprocess.run([config["executables"]["xdotool"], "windowmove", str(window), "0", "0"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        if config["setup"]:
+            vnc = subprocess.Popen([config["executables"]["vnc"], "-display", os.environ["DISPLAY"],
+                                    "-auth", os.environ["XAUTHORITY"], "-localhost", "-rfbport", str(config["setup_port"]),
+                                    "-forever", "-shared", "-nopw", "-noxdamage", "-quiet"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"Browser setup: connect VNC through an SSH tunnel to localhost:{config['setup_port']}. Stop this command after signing in.", flush=True)
+        else:
+            sender = subprocess.Popen(sender_command(config, window))
+            print("Browser window selected; starting AirPlay sender.", flush=True)
+        write_status(config["state_dir"], phase="setup" if config["setup"] else "sender_started",
+                     display=os.environ["DISPLAY"], xauthority=os.environ["XAUTHORITY"],
+                     window_id=window, browser_pid=browser.pid, sender_pid=sender.pid if sender else None)
+        while True:
+            for name, child in [("browser", browser), ("sender", sender), ("setup VNC server", vnc)]:
+                if child is not None and child.poll() is not None:
+                    raise RuntimeError(f"{name} exited; stopping this browser session")
+            time.sleep(0.3)
+    except Stopping:
+        return 0
+    finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        for process in [sender, vnc, browser]:
+            stop(process, group=False)
+        write_status(config["state_dir"], phase="stopped")
+
+
+def main(argv=None):
+    os.umask(0o077)
+    signal.signal(signal.SIGINT, stopping)
+    signal.signal(signal.SIGTERM, stopping)
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) == 2 and argv[0] == "_session":
+        return session(argv[1])
+    args = arguments(argv)
+    if sys.platform != "linux":
+        raise RuntimeError("doubletake-browser runs on Linux; use a Linux VM")
+    if os.geteuid() == 0 and not args.no_browser_sandbox:
+        raise RuntimeError("run as a dedicated unprivileged user so Chromium can keep its sandbox enabled")
+    tools = dependencies(args)
+    if args.check:
+        print("Browser, Xvfb, and sender/setup dependencies found. No browser or TV connection started.")
+        return 0
+    args.state_dir = args.state_dir.expanduser().resolve()
+    args.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.state_dir.stat().st_uid != os.getuid():
+        raise RuntimeError("state directory must belong to the current user")
+    args.state_dir.chmod(0o700)
+    with (args.state_dir / "run.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("this browser profile is already in use") from None
+        with tempfile.TemporaryDirectory(prefix="doubletake-browser-") as runtime:
+            config = vars(args).copy()
+            config.pop("url_file")
+            config["state_dir"] = str(args.state_dir)
+            config["executables"] = tools
+            config_path = Path(runtime) / "session.json"
+            config_path.write_text(json.dumps(config))
+            command = [tools["xvfb"], "--auto-servernum", "--server-args",
+                       f"-screen 0 {args.width}x{args.height}x24 -nolisten tcp",
+                       sys.executable, str(Path(__file__).resolve()), "_session", str(config_path)]
+            worker = None
+            try:
+                worker = subprocess.Popen(command, env=isolated_environment(os.environ, runtime), start_new_session=True)
+                return worker.wait()
+            except Stopping:
+                if worker:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(worker.pid, signal.SIGTERM)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        worker.wait(timeout=20)
+                return 0
+            finally:
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                stop(worker)
+                write_status(args.state_dir, phase="stopped")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        # Do not stringify subprocess errors: they can contain process args
+        # or output. Browser stderr is deliberately suppressed for the same
+        # reason. Never log the dashboard URL or browser authentication data.
+        message = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+        print("doubletake-browser: " + message, file=sys.stderr)
+        sys.exit(1)

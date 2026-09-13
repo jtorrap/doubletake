@@ -1,2 +1,7 @@
 /bin
 /artifacts
+__pycache__/
+*.pyc
+# Runtime profiles and authentication must stay outside this source tree.
+/browser-state/
+/airplay-credentials.json

@@ -1,4 +1,4 @@
-.PHONY: all build doubletake doubletake-ctl doubletake-test-receiver doubletake-release doubletake-ctl-release doubletake-test-receiver-release manpages-release install install-man uninstall test clean
+.PHONY: all build doubletake doubletake-ctl doubletake-test-receiver doubletake-release doubletake-ctl-release doubletake-test-receiver-release manpages-release install install-man uninstall test test-browser test-browser-integration clean
 
 PREFIX ?= /usr/local
 MANDIR ?= $(PREFIX)/share/man
@@ -31,10 +31,17 @@ manpages-release:
 test:
 	go test ./...
 
+test-browser:
+	python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
+test-browser-integration: all
+	python3 -B scripts/browser-smoke.py
+
 install: all install-man
 	install -m 755 bin/doubletake $(PREFIX)/bin/
 	install -m 755 bin/doubletake-ctl $(PREFIX)/bin/
 	install -m 755 bin/doubletake-test-receiver $(PREFIX)/bin/
+	install -m 755 scripts/doubletake-browser $(PREFIX)/bin/
 
 install-man:
 	install -d $(MANDIR)/man1
@@ -46,6 +53,7 @@ uninstall:
 	rm -f $(PREFIX)/bin/doubletake
 	rm -f $(PREFIX)/bin/doubletake-ctl
 	rm -f $(PREFIX)/bin/doubletake-test-receiver
+	rm -f $(PREFIX)/bin/doubletake-browser
 	rm -f $(MANDIR)/man1/doubletake.1
 	rm -f $(MANDIR)/man1/doubletake-ctl.1
 	rm -f $(MANDIR)/man1/doubletake-test-receiver.1

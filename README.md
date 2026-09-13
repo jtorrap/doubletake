@@ -1,5 +1,15 @@
 # doubletake
 
+## Headless browser fork
+
+This fork adds **`doubletake-browser`** to send a web dashboard from a headless
+Linux VM. It manages an isolated Chromium/Xvfb session and uses the existing
+doubletake AirPlay sender to stream only that browser window, including live
+charts and rendered video. Sign-in and pairing persist outside the repository.
+
+See **[headless browser setup and verification](docs/headless-browser.md)**.
+The original sender and protocol implementation remain available below.
+
 AirPlay screen mirroring sender for Linux. Streams your desktop to an Apple TV using the AirPlay mirroring protocol.
 
 ## Features
