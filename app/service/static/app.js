@@ -33,6 +33,7 @@ function controls() {
   $('stop').disabled = busy || !state?.runtime.tv_id;
   $('closeBrowser').disabled = busy || !ready;
   $('fullscreen').disabled = !ready;
+  $('pasteText').disabled = busy || !ready || !rfb;
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
 }
 function renderItems(kind) {
@@ -113,6 +114,27 @@ $('stop').onclick=()=>run(()=>api('api/action/stop',{}));
 $('closeBrowser').onclick=()=>run(()=>api('api/action/close',{}));
 document.querySelectorAll('[data-browser]').forEach(button=>button.onclick=()=>run(()=>api('api/action/browser',{action:button.dataset.browser})));
 $('fullscreen').onclick=()=>$('viewport').requestFullscreen();
+$('pasteText').onclick=()=>{
+  $('pasteValue').value=''; $('pasteError').textContent='';
+  $('pasteDialog').showModal(); $('pasteValue').focus();
+};
+$('cancelPaste').onclick=$('cancelPasteFooter').onclick=()=>$('pasteDialog').close();
+$('pasteDialog').addEventListener('close',()=>{
+  $('pasteValue').value=''; $('pasteError').textContent='';
+});
+$('pasteForm').addEventListener('submit',async event=>{
+  event.preventDefault();
+  let value=$('pasteValue').value;
+  $('pasteValue').value=''; $('sendPaste').disabled=true;
+  try {
+    await api('api/action/insert_text',{value});
+    $('pasteDialog').close(); rfb?.focus();
+  } catch {
+    $('pasteError').textContent='Text could not be sent. Click the field in the preview and try again.';
+  } finally {
+    value=''; $('sendPaste').disabled=false;
+  }
+});
 $('pairForm').addEventListener('submit',event=>{event.preventDefault();const value=$('pairValue').value;$('pairValue').value='';run(()=>api('api/action/pin',{value}));});
 $('discover').onclick=async()=>{
   $('discover').disabled=true; $('discovered').textContent='Looking for Apple TVs…'; $('discovery').showModal();

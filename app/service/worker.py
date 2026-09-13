@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from model import browser_text
 
 
 def load_engine():
@@ -208,6 +209,10 @@ class Worker:
                 await self.cdp.call("Page.navigateToHistoryEntry", {"entryId": history["entries"][index]["id"]}, self.page_session)
         elif action == "reload":
             await self.cdp.call("Page.reload", session=self.page_session)
+        elif action == "insert_text":
+            # Browser-native text insertion preserves Unicode and punctuation.
+            # It neither uses a clipboard nor sends Enter or other key actions.
+            await self.cdp.call("Input.insertText", {"text": browser_text(value["value"])}, self.page_session)
         elif action == "cast":
             self.stop_sender()
             receiver = value["receiver"]
@@ -260,6 +265,9 @@ class Worker:
                 emit("reply", id=value["id"], ok=True)
             except Exception:
                 emit("reply", id=value.get("id"), ok=False, code="browser_command_failed")
+            finally:
+                # Do not retain the last password/PIN in the idle command loop.
+                value.clear()
 
     async def close(self):
         self.stop_sender()

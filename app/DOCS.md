@@ -20,6 +20,13 @@ mouse, keyboard, and scrolling operate the remote browser. Use Back, Forward,
 Reload, or Expand in the preview toolbar. The persistent browser profile retains
 cookies and local storage when the browser closes cleanly.
 
+To paste a password, click its field inside the preview, then click **Paste** in
+the preview toolbar. Paste into the masked **Text to paste** field with ⌘V or
+Ctrl+V and choose **Send text**. This types into the selected browser field without
+submitting the form. The dialog clears when sent or closed. Text is sent through
+authenticated Ingress and the private browser connection; it is not written to
+app settings, logs, MQTT, or the remote clipboard.
+
 Choose a TV and **Show on TV** to send the same browser window. If the receiver
 requests a pairing code or configured AirPlay password, enter it in the app.
 Codes are passed privately and are not saved in settings or logs. Receiver

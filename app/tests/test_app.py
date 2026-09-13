@@ -98,6 +98,11 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status, 200)
                 page = await response.json()
                 self.assertEqual((await client.post('/api/action/open', json={'page_id': page['id']})).status, 200)
+                pasted = 'private fixture 🔑'
+                self.assertEqual((await client.post('/api/action/insert_text', json={'value':pasted})).status, 200)
+                self.assertNotIn(pasted, await (await client.get('/api/state')).text())
+                for value in ['', None, 'x'*4097, 'line\nEnter']:
+                    self.assertEqual((await client.post('/api/action/insert_text', json={'value':value})).status, 400)
                 with self.assertRaises(Exception):
                     await client.ws_connect('/ws/preview', protocols=['binary'])
                 self.assertEqual((await client.post('/api/action/pin', json={'value': '1234'})).status, 400)

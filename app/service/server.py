@@ -143,6 +143,11 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
             await session.browser_action(body["action"])
         elif operation == "pin":
             await session.pin(body.get("value"))
+        elif operation == "insert_text":
+            try:
+                await session.insert_text(body.get("value"))
+            finally:
+                body.clear()
         else:
             raise web.HTTPNotFound()
         return web.json_response({"ok": True, "runtime": session.state()})

@@ -8,13 +8,19 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 ID = re.compile(r"^[a-f0-9]{16}$")
 
 
 def identifier(value):
     if not isinstance(value, str) or not ID.fullmatch(value):
         raise ValueError("Unknown saved item")
+    return value
+
+
+def browser_text(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 4096 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError("Enter up to 4096 characters on one line")
     return value
 
 

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import signal
 import sys
-from model import atomic_json
+from model import atomic_json, browser_text
 
 
 class Session:
@@ -136,6 +136,13 @@ class Session:
     async def browser_action(self, action):
         async with self.lock:
             await self.request(action)
+
+    async def insert_text(self, value):
+        browser_text(value)
+        async with self.lock:
+            if self.runtime["browser"] != "ready":
+                raise ValueError("Open a page first")
+            await self.request("insert_text", value=value)
 
     async def pin(self, value):
         async with self.lock:
