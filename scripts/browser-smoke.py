@@ -42,7 +42,7 @@ for(let y=30;y<300;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(540,y);ctx.
 ctx.strokeStyle='#51e0b1';ctx.lineWidth=4;ctx.beginPath();samples.forEach((v,i)=>{let x=i*9,y=250-v*2;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();requestAnimationFrame(draw);}
 draw(); setInterval(()=>{if(video.currentTime!==last)moving++;last=video.currentTime;
 document.getElementById('status').textContent='WebSocket updates: '+updates+' / video time: '+last.toFixed(2)+'s';
-fetch('/metrics',{method:'POST',body:JSON.stringify({updates,moving,videoTime:last,videoWidth:video.videoWidth,profileToken,hadProfile,hadCookie})});},500);
+fetch('/metrics',{method:'POST',body:JSON.stringify({updates,moving,videoTime:last,videoWidth:video.videoWidth,paused:video.paused,readyState:video.readyState,mediaError:video.error?.code,profileToken,hadProfile,hadCookie})});},500);
 </script>'''
 
 
@@ -157,15 +157,16 @@ def main():
                 Fixture.metrics = {}
                 browser = subprocess.Popen(command + ["--target", "127.0.0.1", "--port", str(port)], stdout=browser_log, stderr=subprocess.STDOUT)
                 active = wait_for(status, 50, "private browser window")
-                wait_for(lambda: Fixture.metrics.get("updates", 0) >= 30 and Fixture.metrics.get("moving", 0) >= 4 and Fixture.metrics.get("videoWidth") == 640, 30, "live WebSocket and decoded video")
-                if Fixture.metrics["profileToken"] != token or not Fixture.metrics["hadProfile"] or not Fixture.metrics["hadCookie"]:
-                    raise RuntimeError("setup browser storage did not survive into streaming mode")
+                wait_for(lambda: Fixture.metrics, 15, "streaming browser page")
 
                 # Decode an independent sample from the exact selected X11
                 # window, not a browser screenshot API or synthetic sender.
                 capture_env = dict(os.environ, DISPLAY=active["display"], XAUTHORITY=active["xauthority"])
                 subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "x11grab", "-window_id", str(active["window_id"]), "-framerate", "15", "-i", active["display"], "-t", "3", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", str(ARTIFACTS / "browser.mp4")], env=capture_env, check=True, timeout=20)
                 subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(ARTIFACTS / "browser.mp4"), "-frames:v", "1", "-y", str(ARTIFACTS / "browser.png")], check=True, timeout=10)
+                wait_for(lambda: Fixture.metrics.get("updates", 0) >= 30 and Fixture.metrics.get("moving", 0) >= 4 and Fixture.metrics.get("videoWidth") == 640, 30, "live WebSocket and decoded video")
+                if Fixture.metrics["profileToken"] != token or not Fixture.metrics["hadProfile"] or not Fixture.metrics["hadCookie"]:
+                    raise RuntimeError("setup browser storage did not survive into streaming mode")
 
                 # Streaming must stop when the browser goes away. A stale
                 # browser video must not continue indefinitely.
@@ -199,6 +200,7 @@ def main():
                 (ARTIFACTS / "result.json").write_text(json.dumps(result, indent=2) + "\n")
                 print(json.dumps(result, indent=2))
         finally:
+            (ARTIFACTS / "metrics.json").write_text(json.dumps(Fixture.metrics, indent=2) + "\n")
             stop(browser)
             stop(receiver)
             server.shutdown()
