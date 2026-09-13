@@ -118,10 +118,14 @@ $('pasteText').onclick=()=>{
   $('pasteValue').value=''; $('pasteError').textContent='';
   $('pasteDialog').showModal(); $('pasteValue').focus();
 };
-$('cancelPaste').onclick=$('cancelPasteFooter').onclick=()=>$('pasteDialog').close();
-$('pasteDialog').addEventListener('close',()=>{
+function clearPaste() {
   $('pasteValue').value=''; $('pasteError').textContent='';
-});
+}
+$('cancelPaste').onclick=$('cancelPasteFooter').onclick=()=>{
+  clearPaste(); $('pasteDialog').close();
+};
+$('pasteDialog').addEventListener('cancel',clearPaste);
+$('pasteDialog').addEventListener('close',clearPaste);
 $('pasteForm').addEventListener('submit',async event=>{
   event.preventDefault();
   let value=$('pasteValue').value;
