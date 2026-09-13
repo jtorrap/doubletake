@@ -33,7 +33,7 @@ class Acceleration(unittest.TestCase):
         self.assertEqual(browser_flags(True, False), [])
         self.assertEqual(browser_flags(False, True), ['--disable-accelerated-video-decode'])
         flags = browser_flags(True, True)
-        self.assertIn('--use-angle=gl', flags)
+        self.assertIn('--use-angle=vulkan', flags)
         self.assertFalse(any('sandbox' in flag for flag in flags))
 
     def test_video_counters_deduplicate_shared_file_descriptors(self):

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4
+
+- Use ANGLE's Vulkan renderer for GPU decoding with the virtual display.
+- Select the accessible render node explicitly for Chromium's media pipeline.
+
 ## 0.1.3
 
 - Enable GPU video decoding on compatible Intel hosts, with a configuration toggle.

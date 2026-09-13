@@ -36,8 +36,8 @@ def browser_flags(enabled, available):
         return ['--disable-accelerated-video-decode']
     if not available:
         return []
-    return ['--use-gl=angle', '--use-angle=gl',
-            '--enable-features=AcceleratedVideoDecodeLinuxGL',
+    return ['--use-gl=angle', '--use-angle=vulkan',
+            '--enable-features=AcceleratedVideoDecoder,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE',
             '--ignore-gpu-blocklist']
 
 
@@ -94,7 +94,11 @@ def video_engine_counters(proc=Path('/proc')):
 
 def main():
     enabled = os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true'
-    os.execvp('google-chrome', ['google-chrome', *browser_flags(enabled, bool(render_nodes())), *sys.argv[1:]])
+    nodes = render_nodes()
+    flags = browser_flags(enabled, bool(nodes))
+    if enabled and nodes:
+        flags.append('--render-node-override=' + str(nodes[0]))
+    os.execvp('google-chrome', ['google-chrome', *flags, *sys.argv[1:]])
 
 
 if __name__ == '__main__':
