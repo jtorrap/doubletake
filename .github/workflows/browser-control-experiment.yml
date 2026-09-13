@@ -1,0 +1,37 @@
+name: Browser control experiment
+on:
+  push:
+    branches: ['codex/browser-control-experiment']
+    paths: ['app/experiments/**', '.github/workflows/browser-control-experiment.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  experiment:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the current app without modifying its runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          tags: doubletake-experiment
+          load: true
+          cache-from: type=gha,scope=ha-app
+      - name: Compare browser control modes in an isolated network
+        run: |
+          mkdir -p artifacts/browser-control
+          sudo chown 1000:1000 artifacts/browser-control
+          docker run --rm --network none --cap-add SYS_ADMIN --user 1000:1000 \
+            --shm-size 512m --entrypoint python3 \
+            -e PYTHONPATH=/opt/browser-app \
+            -v "$PWD/app/experiments:/experiment:ro" \
+            -v "$PWD/artifacts/browser-control:/evidence" \
+            doubletake-experiment -u -B /experiment/browser_control.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-control-evidence
+          path: artifacts/browser-control/
