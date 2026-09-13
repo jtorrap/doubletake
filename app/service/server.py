@@ -86,7 +86,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'"
         return response
 
-    app = web.Application(middlewares=[boundary], client_max_size=16384)
+    app = web.Application(middlewares=[boundary], client_max_size=65536)
     app["store"], app["session"], app["csrf"] = store, session, csrf
 
     async def index(_request):

@@ -20,7 +20,7 @@ const fs = require('fs');
     await page.keyboard.press('Control+A');
     await page.getByRole('button', {name:'Paste', exact:true}).click();
     const secret = 'P@ss "quotes" \\ $ & <tag> café 🔑';
-    const input = page.getByRole('textbox', {name:'Text to paste', exact:true});
+    const input = page.getByLabel('Text to paste', {exact:true});
     if (await input.getAttribute('type') !== 'password') throw Error('Paste is not masked');
     await page.context().grantPermissions(['clipboard-read','clipboard-write'], {origin:process.argv[2]});
     await page.evaluate(text => navigator.clipboard.writeText(text), secret);

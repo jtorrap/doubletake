@@ -245,7 +245,8 @@ class Worker:
             await asyncio.sleep(0.25)
 
     async def commands(self):
-        reader = asyncio.StreamReader(limit=16384)
+        # 4096 Unicode characters can occupy 49152 JSON-escaped bytes.
+        reader = asyncio.StreamReader(limit=65536)
         await asyncio.get_running_loop().connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin.buffer)
         while not self.stop_event.is_set():
             try:
