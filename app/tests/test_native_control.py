@@ -17,6 +17,7 @@ class NativeControls(unittest.TestCase):
                 self.role, self.name = role, name
                 self.flags = {key for key, enabled in [('showing',showing),('focused',focused),('editable',editable)] if enabled}
             def getRole(self): return self.role
+            def __bool__(self): return True
             def getState(self): return SimpleNamespace(contains=lambda flag: flag in self.flags)
             def get_process_id(self): return 42
             def clear_cache(self): pass
