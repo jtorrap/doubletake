@@ -249,7 +249,15 @@ async def run_mode(mode, fixture, base_url, client, evidence):
                 await asyncio.sleep(.3)
                 outcome['webdriver_after_cdp'] = fixture.latest['webdriver']
             outcome['native_navigation'] = await native_navigate(env, fixture, base_url + next_path, next_path)
-            if outcome['native_navigation']:
+            if not outcome['native_navigation'] and mode == 'manual_fullscreen':
+                # Chrome may disable the address bar while full screen. Measure
+                # the native exit/navigate/restore sequence instead of masking it.
+                xdo(env, 'key', '--clearmodifiers', 'F11')
+                outcome['native_exit_fullscreen'] = bool(await fixture.wait(lambda r: r.get('height') != 900))
+                outcome['native_navigation_with_toolbar'] = await native_navigate(env, fixture, base_url + next_path, next_path)
+                xdo(env, 'key', '--clearmodifiers', 'F11')
+                outcome['native_restore_fullscreen'] = bool(await fixture.wait(lambda r: r.get('width') == 1600 and r.get('height') == 900))
+            if outcome['native_navigation'] or outcome.get('native_navigation_with_toolbar'):
                 xdo(env, 'key', '--clearmodifiers', 'alt+Left')
                 outcome['native_back'] = bool(await fixture.wait(lambda r: r.get('path') == start_path))
                 xdo(env, 'key', '--clearmodifiers', 'alt+Right')
