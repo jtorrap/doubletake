@@ -5,25 +5,26 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, '/opt/browser-app')
-from native_control import accessibility_address, frozen_frame, preview_readonly
+from native_control import accessibility_address, frozen_frame, preview_readonly, xdo
 from Xlib import X, display
 
 
 def main():
-    candidates = []
-    for process in Path('/proc').glob('[0-9]*'):
-        try:
-            command = (process/'cmdline').read_bytes().split(b'\0')
-            if b'--class=DoubletakeBrowser' in command and not any(part.startswith(b'--type=') for part in command):
-                candidates.append((process, command))
-        except OSError:
-            pass
-    assert len(candidates) == 1
-    process, command = candidates[0]
+    # The fixture owns exactly one worker and X display. Resolve Chrome through
+    # its actual window, not inherited/rewritten child-process command lines.
+    runtimes = list(Path('/tmp').glob('doubletake-app-*'))
+    displays = list(Path('/tmp/.X11-unix').glob('X[0-9]*'))
+    assert len(runtimes) == len(displays) == 1
+    runtime = runtimes[0]
+    os.environ.update(DISPLAY=':'+displays[0].name[1:], XAUTHORITY=str(runtime/'Xauthority'),
+                      XDG_RUNTIME_DIR=str(runtime), DBUS_SESSION_BUS_ADDRESS='unix:path='+str(runtime/'session-bus'))
+    os.environ['AT_SPI_BUS_ADDRESS'] = accessibility_address(os.environ)
+    windows = xdo('search','--onlyvisible','--class','^DoubletakeBrowser$').split()
+    assert len(windows) == 1
+    process = Path('/proc') / xdo('getwindowpid', windows[0])
+    command = (process/'cmdline').read_bytes().split(b'\0')
+    assert command[0]
     assert not any(part.startswith((b'--remote-debugging',b'--enable-automation',b'--headless')) for part in command)
-    environment = dict(part.split(b'=',1) for part in (process/'environ').read_bytes().split(b'\0') if b'=' in part)
-    for name in ('DISPLAY','XAUTHORITY','DBUS_SESSION_BUS_ADDRESS','XDG_RUNTIME_DIR','AT_SPI_BUS_ADDRESS'):
-        os.environ[name] = environment[name.encode()].decode()
     if '--inspect' in sys.argv:
         import pyatspi
         rows, queue = [], [(app,0) for app in pyatspi.Registry.getDesktop(0) if app]
