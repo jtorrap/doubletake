@@ -86,8 +86,11 @@ class ChromeUI:
                 role = node.getRole()
                 if role in {spi.ROLE_DOCUMENT_WEB, spi.ROLE_DOCUMENT_FRAME, spi.ROLE_EMBEDDED}:
                     continue
-                toolbar = toolbar or role == spi.ROLE_TOOL_BAR
                 states = node.getState()
+                # Chrome may mark the entry SHOWING even when its containing
+                # toolbar is hidden by fullscreen. Require the toolbar itself.
+                if role == spi.ROLE_TOOL_BAR:
+                    toolbar = states.contains(spi.STATE_SHOWING)
                 if toolbar and node.name == 'Address and search bar' and states.contains(spi.STATE_EDITABLE):
                     if states.contains(spi.STATE_SHOWING) and (not focused or states.contains(spi.STATE_FOCUSED)):
                         return node

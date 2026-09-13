@@ -2,6 +2,7 @@ import contextlib
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
@@ -9,6 +10,29 @@ import native_control as native
 
 
 class NativeControls(unittest.TestCase):
+    def test_hidden_toolbar_cannot_authorize_address_input(self):
+        class Node(list):
+            def __init__(self, role, name='', showing=True, focused=False, editable=False, children=()):
+                super().__init__(children)
+                self.role, self.name = role, name
+                self.flags = {key for key, enabled in [('showing',showing),('focused',focused),('editable',editable)] if enabled}
+            def getRole(self): return self.role
+            def getState(self): return SimpleNamespace(contains=lambda flag: flag in self.flags)
+            def get_process_id(self): return 42
+            def clear_cache(self): pass
+        entry = Node('entry','Address and search bar',focused=True,editable=True)
+        toolbar = Node('toolbar',showing=False,children=[entry])
+        app = Node('app',children=[toolbar])
+        spi = SimpleNamespace(Registry=SimpleNamespace(getDesktop=lambda index:[app]),
+            ROLE_TOOL_BAR='toolbar',ROLE_DOCUMENT_WEB='web',ROLE_DOCUMENT_FRAME='doc',ROLE_EMBEDDED='embedded',
+            STATE_SHOWING='showing',STATE_FOCUSED='focused',STATE_EDITABLE='editable')
+        glib = SimpleNamespace(MainContext=SimpleNamespace(default=lambda:SimpleNamespace(pending=lambda:False)))
+        with patch.dict(sys.modules, {'pyatspi':spi, 'gi.repository':SimpleNamespace(GLib=glib)}):
+            ui = native.ChromeUI(42)
+            self.assertIsNone(ui.address(focused=True))
+            toolbar.flags.add('showing')
+            self.assertIs(ui.address(focused=True), entry)
+
     def test_launch_has_no_debugging_or_automation_flag(self):
         engine = Mock()
         engine.browser_command.return_value = ['chrome', '--remote-debugging-pipe', '--kiosk', '--app=file:///fixture', '--user-data-dir=/private/profile', '--force-device-scale-factor=1']
