@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 --shell /usr/sbin/nologin browser
-RUN echo 'deb http://deb.debian.org/debian bookworm main non-free' > /etc/apt/sources.list.d/intel-media.list \
+RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm non-free' > /etc/apt/sources.list.d/intel-media.list \
     && apt-get update && apt-get install -y --no-install-recommends \
        intel-media-va-driver-non-free libva-drm2 vainfo libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
