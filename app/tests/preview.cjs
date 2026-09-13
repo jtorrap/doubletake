@@ -17,7 +17,6 @@ const fs = require('fs');
     await page.keyboard.type('keyboard works');
     // Exercise an actual paste into the app's masked dialog, followed by
     // Unicode insertion into the focused field in the separate app browser.
-    await page.keyboard.press('Control+A');
     await page.getByRole('button', {name:'Paste', exact:true}).click();
     const secret = 'P@ss "quotes" \\ $ & <tag> café 🔑';
     const input = page.getByLabel('Text to paste', {exact:true});

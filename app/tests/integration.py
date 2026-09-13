@@ -88,7 +88,7 @@ def main():
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
-            fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'P@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
+            fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
             api('/api/action/cast', {'page_id': page['id'], 'tv_id': tv['id']})
             fixture.wait_for(lambda: api('/api/state')['runtime']['airplay'] == 'sending', 30, 'AirPlay readiness')
             fixture.wait_for(lambda: max([int(v) for v in re.findall(r'video=(\d+)/', log.read_text())] or [0]) >= 30, 30, 'AirPlay packets')
