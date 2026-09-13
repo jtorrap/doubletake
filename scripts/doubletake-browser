@@ -12,6 +12,8 @@ import html
 import json
 import os
 from pathlib import Path
+import secrets
+import select
 import shutil
 import signal
 import subprocess
@@ -88,9 +90,8 @@ def dependencies(args):
     browser = args.browser or next((n for n in ["chromium", "chromium-browser", "google-chrome"] if shutil.which(n)), None)
     if browser is None:
         raise RuntimeError("install Chromium or specify --browser")
-    result = {"browser": executable(browser), "xvfb": executable("xvfb-run"), "xdotool": executable("xdotool")}
-    executable("Xvfb")
-    executable("xauth")
+    result = {"browser": executable(browser), "xvfb": executable("Xvfb"),
+              "xauth": executable("xauth"), "xdotool": executable("xdotool")}
     if args.setup:
         result["vnc"] = executable("x11vnc")
     else:
@@ -125,6 +126,50 @@ def browser_command(config, bootstrap):
             "--app=" + bootstrap.as_uri()]
 
 
+def start_display(config, runtime):
+    env = isolated_environment(os.environ, runtime)
+    authority = Path(runtime) / "Xauthority"
+    authority.touch(mode=0o600)
+    cookie = secrets.token_hex(16)
+
+    def authorize(display):
+        # xauth receives the cookie on stdin, never in process arguments.
+        subprocess.run([config["executables"]["xauth"], "-f", str(authority), "source", "-"],
+                       input=f"add {display} MIT-MAGIC-COOKIE-1 {cookie}\n", text=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=5)
+
+    # Xvfb reads the cookie from this file irrespective of the entry's display
+    # number. Once -displayfd allocates a free display, add the client lookup
+    # entry for that number too. No race-prone manual display reservation.
+    authorize(":0")
+    read_fd, write_fd = os.pipe()
+    display = None
+    try:
+        display = subprocess.Popen([config["executables"]["xvfb"], "-displayfd", str(write_fd),
+                                    "-screen", "0", f"{config['width']}x{config['height']}x24",
+                                    "-nolisten", "tcp", "-auth", str(authority)],
+                                   env=env, pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        os.close(write_fd)
+        write_fd = None
+        if not select.select([read_fd], [], [], 10)[0]:
+            raise RuntimeError("timed out starting the private Xvfb display")
+        number = os.read(read_fd, 32).strip()
+        if not number.isdigit() or display.poll() is not None:
+            raise RuntimeError("Xvfb did not allocate a private display")
+        name = ":" + number.decode("ascii")
+        authorize(name)
+        env.update(DISPLAY=name, XAUTHORITY=str(authority))
+        return display, env
+    except BaseException:
+        stop(display)
+        raise
+    finally:
+        os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
+
+
 def sender_command(config, window):
     cmd = [config["executables"]["sender"], "-target", config["target"],
            "-port", str(config["port"]), "-fps", str(config["fps"]),
@@ -137,29 +182,21 @@ def sender_command(config, window):
     return cmd
 
 
-def stop(process, group=True):
+def stop(process):
     if process is None:
         return
-    # The xvfb-run worker owns one group containing the virtual display,
-    # browser children, and sender/encoder. Never kill by executable name.
+    # Each managed process owns a group including its children. Never kill
+    # by executable name or touch another browser/display session.
     with contextlib.suppress(ProcessLookupError):
-        (os.killpg if group else os.kill)(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=4)
     except subprocess.TimeoutExpired:
         pass
-    # The wrapper can exit before its children finish shutting down. Allow
-    # them to flush the profile before enforcing cleanup of the owned group.
-    if group:
-        deadline = time.monotonic() + 4
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.1)
+    # The leader may exit before all its children. Enforce group cleanup
+    # after its graceful shutdown, before releasing the profile lock.
     with contextlib.suppress(ProcessLookupError):
-        (os.killpg if group else os.kill)(process.pid, signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=4)
 
 
@@ -175,25 +212,24 @@ def stopping(_signum, _frame):
     raise Stopping()
 
 
-def session(config_path):
-    config = json.loads(Path(config_path).read_text())
+def session(config, runtime, display, env):
     browser = sender = vnc = None
     try:
-        bootstrap = Path(config_path).with_name("launch.html")
+        bootstrap = Path(runtime) / "launch.html"
         # Keep private dashboard URLs out of Chromium's process arguments and
         # logs. Only this mode-0600 local bootstrap contains the destination.
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(config["url"], quote=True) + '"><title>Opening dashboard</title>')
-        browser_env = dict(os.environ)
+        browser_env = dict(env)
         browser_env.pop("DOUBLETAKE_CODE", None)
         browser = subprocess.Popen(browser_command(config, bootstrap), env=browser_env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         deadline = time.monotonic() + 40
         window = None
         while time.monotonic() < deadline:
             if browser.poll() is not None:
                 raise RuntimeError("Chromium exited before creating its window; check the installed browser and sandbox support")
             found = subprocess.run([config["executables"]["xdotool"], "search", "--onlyvisible", "--class", "^DoubletakeBrowser$"],
-                                   capture_output=True, text=True, timeout=3)
+                                   env=env, capture_output=True, text=True, timeout=3)
             candidates = found.stdout.split()
             if found.returncode == 0 and len(candidates) == 1 and candidates[0].isdigit():
                 window = int(candidates[0])
@@ -202,22 +238,22 @@ def session(config_path):
         if window is None:
             raise RuntimeError("timed out waiting for exactly one browser window")
         # Xvfb has no window manager. Give the owned window exact geometry.
-        subprocess.run([config["executables"]["xdotool"], "windowsize", str(window), str(config["width"]), str(config["height"])], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
-        subprocess.run([config["executables"]["xdotool"], "windowmove", str(window), "0", "0"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        subprocess.run([config["executables"]["xdotool"], "windowsize", str(window), str(config["width"]), str(config["height"])], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
+        subprocess.run([config["executables"]["xdotool"], "windowmove", str(window), "0", "0"], env=env, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
         if config["setup"]:
-            vnc = subprocess.Popen([config["executables"]["vnc"], "-display", os.environ["DISPLAY"],
-                                    "-auth", os.environ["XAUTHORITY"], "-localhost", "-rfbport", str(config["setup_port"]),
+            vnc = subprocess.Popen([config["executables"]["vnc"], "-display", env["DISPLAY"],
+                                    "-auth", env["XAUTHORITY"], "-localhost", "-rfbport", str(config["setup_port"]),
                                     "-forever", "-shared", "-nopw", "-noxdamage", "-quiet"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             print(f"Browser setup: connect VNC through an SSH tunnel to localhost:{config['setup_port']}. Stop this command after signing in.", flush=True)
         else:
-            sender = subprocess.Popen(sender_command(config, window))
+            sender = subprocess.Popen(sender_command(config, window), env=env, start_new_session=True)
             print("Browser window selected; starting AirPlay sender.", flush=True)
         write_status(config["state_dir"], phase="setup" if config["setup"] else "sender_started",
-                     display=os.environ["DISPLAY"], xauthority=os.environ["XAUTHORITY"],
+                     display=env["DISPLAY"], xauthority=env["XAUTHORITY"], display_pid=display.pid,
                      window_id=window, browser_pid=browser.pid, sender_pid=sender.pid if sender else None)
         while True:
-            for name, child in [("browser", browser), ("sender", sender), ("setup VNC server", vnc)]:
+            for name, child in [("display", display), ("browser", browser), ("sender", sender), ("setup VNC server", vnc)]:
                 if child is not None and child.poll() is not None:
                     raise RuntimeError(f"{name} exited; stopping this browser session")
             time.sleep(0.3)
@@ -227,7 +263,7 @@ def session(config_path):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         for process in [sender, vnc, browser]:
-            stop(process, group=False)
+            stop(process)
         write_status(config["state_dir"], phase="stopped")
 
 
@@ -236,8 +272,6 @@ def main(argv=None):
     signal.signal(signal.SIGINT, stopping)
     signal.signal(signal.SIGTERM, stopping)
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) == 2 and argv[0] == "_session":
-        return session(argv[1])
     args = arguments(argv)
     if sys.platform != "linux":
         raise RuntimeError("doubletake-browser runs on Linux; use a Linux VM")
@@ -262,26 +296,16 @@ def main(argv=None):
             config.pop("url_file")
             config["state_dir"] = str(args.state_dir)
             config["executables"] = tools
-            config_path = Path(runtime) / "session.json"
-            config_path.write_text(json.dumps(config))
-            command = [tools["xvfb"], "--auto-servernum", "--server-args",
-                       f"-screen 0 {args.width}x{args.height}x24 -nolisten tcp",
-                       sys.executable, str(Path(__file__).resolve()), "_session", str(config_path)]
-            worker = None
+            display = None
             try:
-                worker = subprocess.Popen(command, env=isolated_environment(os.environ, runtime), start_new_session=True)
-                return worker.wait()
+                display, env = start_display(config, runtime)
+                return session(config, runtime, display, env)
             except Stopping:
-                if worker:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(worker.pid, signal.SIGTERM)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        worker.wait(timeout=20)
                 return 0
             finally:
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-                stop(worker)
+                stop(display)
                 write_status(args.state_dir, phase="stopped")
 
 

@@ -136,5 +136,13 @@ against a real dashboard or authenticated browser profile.
 
 - Upstream base: `ae06722` (full commit recorded in Git history).
 - Added browser-only launcher, VM/service instructions, and Linux smoke check.
+- The initial `xvfb-run` subprocess wrapper failed the setup shutdown check.
+  The launcher now owns Xvfb directly, uses `-displayfd` for allocation, and
+  supervises each process group explicitly with a private Xauthority cookie.
+- Upstream uses Linux-specific process-death handling. Native macOS builds do
+  not compile; Linux cross-compilation works, and execution tests run on Linux.
+- GitHub workflow changes require an appropriate credential scope; an existing
+  SSH credential for the fork's owner can be used instead of an OAuth token
+  without workflow access.
 - No Home Assistant configuration or Apple TV playback changed during development.
 - Live HA sign-in, Apple TV playback, latency, and long-run recovery are pending.

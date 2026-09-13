@@ -153,7 +153,7 @@ def main():
                 token = Fixture.metrics["profileToken"]
                 stop(browser)
                 if browser.returncode != 0 or Path(setup["xauthority"]).exists():
-                    raise RuntimeError("setup shutdown did not cleanly stop the private display")
+                    raise RuntimeError(f"setup shutdown failed: exit={browser.returncode}, authority_exists={Path(setup['xauthority']).exists()}")
                 Fixture.metrics = {}
                 browser = subprocess.Popen(command + ["--target", "127.0.0.1", "--port", str(port)], stdout=browser_log, stderr=subprocess.STDOUT)
                 active = wait_for(status, 50, "private browser window")
@@ -178,6 +178,12 @@ def main():
                     raise RuntimeError("launcher did not record stopped state")
                 if Path(active["xauthority"]).exists():
                     raise RuntimeError("private Xauthority directory survived cleanup")
+                for name in ["display_pid", "browser_pid", "sender_pid"]:
+                    try:
+                        os.kill(active[name], 0)
+                    except ProcessLookupError:
+                        continue
+                    raise RuntimeError(f"managed {name} survived cleanup")
                 if not (work / "state/profile").is_dir():
                     raise RuntimeError("browser profile was not preserved")
                 stop(receiver)
