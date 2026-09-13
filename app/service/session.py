@@ -86,8 +86,6 @@ class Session:
         env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
         command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
-        if self.control_mode == 'native':
-            command = ['dbus-run-session', '--', *command]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
         self.reader_task = asyncio.create_task(self.read_events(self.process))
         try:
@@ -161,7 +159,7 @@ class Session:
         process = self.process
         if process:
             if process.returncode is None:
-                # Ask the worker to flush Chrome before dbus-run-session exits.
+                # Ask the worker to flush Chrome before its private bus exits.
                 with contextlib.suppress(ValueError, OSError):
                     await self.request('close')
                 try:

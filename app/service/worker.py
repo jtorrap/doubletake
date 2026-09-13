@@ -97,6 +97,7 @@ class Worker:
         self.config = config
         self.engine = load_engine()
         self.browser = self.display = self.vnc = self.sender = None
+        self.bus = None
         self.command_fd = self.response_fd = None
         self.cdp = None
         self.environment = None
@@ -159,6 +160,7 @@ class Worker:
         return {**capabilities, **info,
                 'control_mode': 'native' if self.native else 'diagnostic',
                 'browser_inspection_available': not self.native,
+                'last_control_error': getattr(self, 'native_error', None),
                 'display': {'width': self.engine_config['width'], 'height': self.engine_config['height'],
                             'fps': self.engine_config['fps'], **page.get('display', {})},
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
@@ -182,7 +184,15 @@ class Worker:
         self.stage = "display"
         self.display, self.environment = self.engine.start_display(self.engine_config, runtime)
         if self.native:
-            self.environment['DBUS_SESSION_BUS_ADDRESS'] = os.environ['DBUS_SESSION_BUS_ADDRESS']
+            # A filesystem socket inside the private container/runtime avoids
+            # abstract UNIX sockets shared by HA host-network applications.
+            address = 'unix:path=' + str(Path(runtime) / 'session-bus')
+            self.bus = subprocess.Popen(['dbus-daemon', '--session', '--nofork', '--address='+address, '--print-address=1'],
+                    env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+            ready = await asyncio.wait_for(asyncio.to_thread(self.bus.stdout.readline), 5)
+            if not ready.decode().startswith(address):
+                raise RuntimeError('private_bus_unavailable')
+            self.environment['DBUS_SESSION_BUS_ADDRESS'] = ready.decode().strip()
             self.environment['ACCESSIBILITY_ENABLED'] = '1'
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
@@ -284,6 +294,7 @@ class Worker:
                 {'action':action, 'window':self.window, 'pid':self.browser.pid, **fields}).encode()), 35)
             result = json.loads(output)
             if not result.get('ok'):
+                self.native_error = result.get('stage') if result.get('stage') in {'validate','preview','focus','text','address','freeze','navigate','restore'} else 'control'
                 raise RuntimeError('native_control_failed')
         finally:
             fields.clear()
@@ -391,6 +402,7 @@ class Worker:
             if fd is not None:
                 os.close(fd)
         self.engine.stop(self.display)
+        self.engine.stop(self.bus)
 
 
 async def main():

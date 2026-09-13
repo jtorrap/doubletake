@@ -11,6 +11,8 @@ import sys
 import time
 from model import browser_text, page_url
 
+STAGE = 'validate'
+
 
 def browser_command(engine, config, bootstrap):
     command = [part for part in engine.browser_command(config, bootstrap)
@@ -102,6 +104,7 @@ def frozen_frame(window_id):
 
 
 def perform(value):
+    global STAGE
     action, window, pid = value['action'], int(value['window']), int(value['pid'])
     if action not in {'insert_text', 'navigate', 'back', 'forward', 'reload', 'close'}:
         raise ValueError('unknown_native_action')
@@ -109,8 +112,10 @@ def perform(value):
     url = page_url(value['url']) if action == 'navigate' else None
     if int(xdo('getwindowpid', window)) != pid:
         raise RuntimeError('browser_window_changed')
+    STAGE = 'preview'
     preview_readonly(True)
     try:
+        STAGE = 'focus'
         # Discard held VNC modifiers before generating our own input. The VNC
         # guard applies to all connected clients, not only the current UI tab.
         xdo('keyup', 'Control_L', 'Control_R', 'Shift_L', 'Shift_R', 'Alt_L', 'Alt_R', 'Super_L', 'Super_R')
@@ -118,15 +123,19 @@ def perform(value):
         if int(xdo('getwindowfocus')) != window:
             raise RuntimeError('browser_focus_unconfirmed')
         if action == 'insert_text':
+            STAGE = 'text'
             xdo('type', '--clearmodifiers', '--delay', '1', '--file', '-', text=text)
         elif action == 'navigate':
             ui = ChromeUI(pid)
+            STAGE = 'freeze'
             with frozen_frame(window):
+                STAGE = 'address'
                 if not ui.address():
                     xdo('key', '--clearmodifiers', 'F11')
                 wait_for(ui.address)
                 xdo('key', '--clearmodifiers', 'ctrl+l')
                 wait_for(lambda: ui.address(focused=True))
+                STAGE = 'navigate'
                 xdo('type', '--clearmodifiers', '--delay', '1', '--file', '-', text=url)
                 # The focused native address bar is the only place Enter is
                 # generated. Paste never presses Enter or changes selection.
@@ -134,6 +143,7 @@ def perform(value):
                     raise RuntimeError('address_focus_changed')
                 xdo('key', '--clearmodifiers', 'Return')
                 time.sleep(.3)
+                STAGE = 'restore'
                 xdo('key', '--clearmodifiers', 'F11')
                 wait_for(lambda: not ui.address())
                 # Let Chrome's full-screen notice finish before capture resumes.
@@ -158,7 +168,7 @@ def main():
         print('{"ok":true}')
     except Exception:
         # Fixed code only: subprocess exceptions contain their input arguments.
-        print('{"ok":false,"code":"native_control_failed"}')
+        print(json.dumps({'ok':False,'code':'native_control_failed','stage':STAGE}))
         return 1
     finally:
         value.clear()
