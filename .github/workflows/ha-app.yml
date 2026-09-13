@@ -19,4 +19,6 @@ jobs:
         run: docker build -t doubletake-app app
       - name: Sandboxed browser preflight
         run: |
-          docker run --rm --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
+          docker run --rm --cap-add SYS_ADMIN --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
+      - name: App boundary and lifecycle tests
+        run: docker run --rm --user 1000:1000 --entrypoint python3 -v "$PWD/app:/source:ro" doubletake-app -B -m unittest discover -s /source/tests -v
