@@ -91,6 +91,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                 body = {'name': 'Test', 'url': 'https://example.com/'}
                 self.assertEqual((await client.post('/api/settings/pages', json=body)).status, 403)
                 client.session.headers['X-Doubletake-CSRF'] = state['csrf']
+                self.assertEqual((await client.post('/api/settings/tvs', json={'name': 'TV', 'host': '127.0.0.1'})).status, 200)
                 response = await client.post('/api/settings/pages', json=body)
                 self.assertEqual(response.status, 200)
                 page = await response.json()

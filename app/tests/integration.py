@@ -116,6 +116,7 @@ def main():
                 subprocess.run(['docker', 'logs', 'doubletake-integration'], stdout=output, stderr=subprocess.STDOUT)
             subprocess.run(['docker', 'stop', '-t', '60', 'doubletake-integration'], check=False)
             subprocess.run(['docker', 'rm', 'doubletake-integration'], check=False)
+            subprocess.run(['sudo', 'chown', '-R', f'{os.getuid()}:{os.getgid()}', str(state)], check=True)
             fixture.stop(receiver)
             server.shutdown()
 

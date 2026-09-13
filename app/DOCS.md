@@ -61,6 +61,11 @@ AirPlay implementation. Host networking supports receiver discovery and the
 negotiated AirPlay ports. Ingress accepts only Supervisor's gateway; VNC is
 password-protected and loopback-only. No debugging port is exposed.
 
+Chrome's sandbox requires the container's `SYS_ADMIN` capability to create its
+namespaces under Docker's syscall policy. The controller and browser run as uid
+1000. Supervisor protection and AppArmor remain enabled; no host filesystem,
+Docker socket, or host PID namespace is mapped.
+
 ## Storage, backups, and rollback
 
 All runtime data is in the app's private `/data/doubletake` directory: named

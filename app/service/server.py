@@ -102,7 +102,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         value = await request.json()
         item_id = request.match_info.get("item_id")
         # Changing an active receiver address requires a fresh connection.
-        if kind == "tvs" and item_id == session.runtime["tv_id"]:
+        if kind == "tvs" and item_id is not None and item_id == session.runtime["tv_id"]:
             old = store.get(kind, item_id)
             normalized = store.validate(kind, value)
             if old["host"] != normalized["host"] or old["port"] != normalized["port"]:

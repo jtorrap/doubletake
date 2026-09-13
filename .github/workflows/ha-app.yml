@@ -18,8 +18,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: docker/setup-buildx-action@v3
       - name: Build installable app
-        run: docker build -t doubletake-app app
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          tags: doubletake-app
+          load: true
+          cache-from: type=gha,scope=ha-app
+          cache-to: type=gha,mode=max,scope=ha-app
       - name: Sandboxed browser preflight
         run: |
           docker run --rm --cap-add SYS_ADMIN --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
