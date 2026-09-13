@@ -14,6 +14,21 @@ from model import browser_text, page_url
 STAGE = 'validate'
 
 
+def accessibility_address(environment):
+    from gi.repository import Gio, GLib
+    bus = Gio.DBusConnection.new_for_address_sync(environment['DBUS_SESSION_BUS_ADDRESS'],
+        Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+    try:
+        reply = bus.call_sync('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress', None,
+                              GLib.VariantType.new('(s)'), Gio.DBusCallFlags.NONE, 10000, None)
+        address = reply.unpack()[0]
+        if not address.startswith('unix:path=' + environment['XDG_RUNTIME_DIR'] + '/'):
+            raise RuntimeError('accessibility_bus_not_private')
+        return address
+    finally:
+        bus.close_sync(None)
+
+
 def browser_command(engine, config, bootstrap):
     command = [part for part in engine.browser_command(config, bootstrap)
                if part not in {'--remote-debugging-pipe', '--kiosk'} and not part.startswith('--app=')]

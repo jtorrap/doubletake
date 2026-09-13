@@ -5,6 +5,7 @@ All pages, storage and receivers here are synthetic. No home credentials or
 real receivers are available to this test. Chrome inside the app is sandboxed.
 """
 import http.server
+import contextlib
 import importlib.util
 import json
 import os
@@ -77,7 +78,7 @@ def main():
             with log.open('w') as output:
                 receiver = subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{receiver_port}', '-profile', 'uxplay', '-stats-interval', '1s'], stdout=output, stderr=subprocess.STDOUT)
             fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
-            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
+            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '-v', f'{ROOT / "app/tests"}:/testsource:ro', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
             def ready():
                 try:
                     return api('/api/state')
@@ -102,6 +103,9 @@ def main():
             assert metrics['webdriver'] == (CONTROL == 'diagnostic'), metrics
             assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1600,900,120,True)
             assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
+            if CONTROL == 'native':
+                boundary_checks = json.loads(subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/native_runtime.py'], text=True))
+                (ARTIFACTS/'native-runtime.json').write_text(json.dumps(boundary_checks,indent=2))
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
             fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
             api('/api/action/cast', {'page_id': page['id'], 'tv_id': tv['id']})
@@ -140,6 +144,12 @@ def main():
                       'stop_preserves_browser': True, 'close_cleans_processes': True, 'real_apple_tv_tested': False}
             (ARTIFACTS / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result, indent=2))
+        except Exception:
+            with contextlib.suppress(Exception):
+                print(json.dumps({'failure_runtime':api('/api/state')['runtime']}))
+            with contextlib.suppress(Exception):
+                print(json.dumps({'failure_diagnostics':api('/api/diagnostics', {})}))
+            raise
         finally:
             # Only synthetic fixture logs are uploaded. Never copy this pattern
             # to a live app with user URLs, browser state, or authentication.

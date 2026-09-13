@@ -23,6 +23,7 @@ from model import browser_text
 from acceleration import gpu_info, va_capabilities, video_engine_counters
 from browser_preferences import prepare_profile
 from native_control import browser_command as native_browser_command
+from native_control import accessibility_address
 
 
 def load_engine():
@@ -194,6 +195,7 @@ class Worker:
                 raise RuntimeError('private_bus_unavailable')
             self.environment['DBUS_SESSION_BUS_ADDRESS'] = ready.decode().strip()
             self.environment['ACCESSIBILITY_ENABLED'] = '1'
+            self.environment['AT_SPI_BUS_ADDRESS'] = await asyncio.to_thread(accessibility_address, self.environment)
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
@@ -288,7 +290,7 @@ class Worker:
     async def native_command(self, action, **fields):
         process = await asyncio.create_subprocess_exec(sys.executable, '-B', str(Path(__file__).with_name('native_control.py')),
                     env=self.environment, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL)
+                    stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
         try:
             output, _ = await asyncio.wait_for(process.communicate(json.dumps(
                 {'action':action, 'window':self.window, 'pid':self.browser.pid, **fields}).encode()), 35)
@@ -296,11 +298,27 @@ class Worker:
             if not result.get('ok'):
                 self.native_error = result.get('stage') if result.get('stage') in {'validate','preview','focus','text','address','freeze','navigate','restore'} else 'control'
                 raise RuntimeError('native_control_failed')
+            self.native_error = None
         finally:
             fields.clear()
             if process.returncode is None:
-                process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
                 await process.wait()
+            # Also recover after helper timeout/cancellation. The X11 cover is
+            # owned by that helper connection and disappears when it exits.
+            recovery = await asyncio.create_subprocess_exec('x11vnc', '-display', self.environment['DISPLAY'],
+                '-auth', self.environment['XAUTHORITY'], '-R', 'noviewonly', '-Q', 'viewonly',
+                env=self.environment, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                answer, _ = await asyncio.wait_for(recovery.communicate(), 8)
+                if recovery.returncode or b'ans=viewonly:0' not in answer:
+                    self.stop_event.set()
+            finally:
+                if recovery.returncode is None:
+                    recovery.kill()
+                    await recovery.wait()
+                    self.stop_event.set()
 
     async def command(self, value):
         action = value["action"]
