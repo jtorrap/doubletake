@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 from model import browser_text
+from acceleration import gpu_info, va_capabilities, video_engine_counters
 
 
 def load_engine():
@@ -35,12 +36,13 @@ def emit(kind, **values):
 
 
 class CDP:
-    def __init__(self, command_fd, response_fd):
+    def __init__(self, command_fd, response_fd, on_event=lambda _value: None):
         self.command_fd, self.response_fd = command_fd, response_fd
         self.loop = asyncio.get_running_loop()
         self.buffer = b""
         self.sequence = 100
         self.pending = {}
+        self.on_event = on_event
         self.loop.add_reader(response_fd, self.read)
 
     def read(self):
@@ -56,6 +58,8 @@ class CDP:
             while b"\0" in self.buffer:
                 raw, self.buffer = self.buffer.split(b"\0", 1)
                 value = json.loads(raw)
+                if "method" in value:
+                    self.on_event(value)
                 future = self.pending.pop(value.get("id"), None)
                 if future and not future.done():
                     if "error" in value:
@@ -99,6 +103,59 @@ class Worker:
         self.sender_buffer = ""
         self.stop_event = asyncio.Event()
         self.stage = "dependencies"
+        self.media = {}
+
+    def media_event(self, value):
+        if value.get('method') != 'Media.playerPropertiesChanged':
+            return
+        params = value.get('params', {})
+        player = params.get('playerId')
+        if player not in self.media and len(self.media) >= 16:
+            self.media.pop(next(iter(self.media)))
+        properties = self.media.setdefault(player, {})
+        for item in params.get('properties', []):
+            name, content = item.get('name'), item.get('value')
+            if name == 'kVideoDecoderName' and content in {
+                'GpuVideoDecoder', 'VaapiVideoDecoder', 'FFmpegVideoDecoder',
+                'VpxVideoDecoder', 'Dav1dVideoDecoder', 'MojoVideoDecoder'}:
+                properties['decoder'] = content
+            elif name == 'kIsPlatformVideoDecoder' and content in {'true', 'false'}:
+                properties['platform_decoder'] = content == 'true'
+
+    async def diagnostics(self):
+        capabilities = await asyncio.to_thread(va_capabilities)
+        info = gpu_info(await self.cdp.call('SystemInfo.getInfo'))
+        before = video_engine_counters()
+        started = time.monotonic_ns()
+        await asyncio.sleep(1)
+        after = video_engine_counters()
+        elapsed = time.monotonic_ns() - started
+        common = before.keys() & after.keys()
+        video_ns = sum(max(0, after[key] - before[key]) for key in common)
+        # Read only video dimensions/playback counters, including HA shadow DOM.
+        # The fixed expression returns no page text, URLs, cookies, or inputs.
+        expression = '''(() => {
+          const videos = [], visit = root => {
+            for (const element of root.querySelectorAll('*')) {
+              if (element.tagName === 'VIDEO') {
+                const q = element.getVideoPlaybackQuality();
+                videos.push({width:element.videoWidth,height:element.videoHeight,
+                  ready_state:element.readyState,paused:element.paused,
+                  decoded_frames:q.totalVideoFrames,dropped_frames:q.droppedVideoFrames,
+                  error_code:element.error?.code || null});
+              }
+              if (element.shadowRoot) visit(element.shadowRoot);
+            }
+          }; visit(document); return videos.slice(0,16);
+        })()'''
+        videos = await self.cdp.call('Runtime.evaluate', {'expression': expression, 'returnByValue': True}, self.page_session)
+        return {**capabilities, **info,
+                'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
+                'video_engine_observable': bool(common),
+                'video_engine_active': video_ns > 0,
+                'video_engine_busy_percent': round(video_ns / elapsed * 100, 2) if common else None,
+                'players': [p for p in self.media.values() if p],
+                'videos': videos.get('result', {}).get('value', [])}
 
     async def start(self, runtime):
         args = self.engine.arguments(["--url", self.config["url"], "--setup", "--state-dir", self.config["profile_dir"]])
@@ -117,7 +174,7 @@ class Worker:
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
         self.browser, self.command_fd, self.response_fd = self.engine.start_browser(self.engine_config, bootstrap, self.environment)
-        self.cdp = CDP(self.command_fd, self.response_fd)
+        self.cdp = CDP(self.command_fd, self.response_fd, self.media_event)
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
@@ -139,6 +196,8 @@ class Worker:
         page = next(t for t in targets["targetInfos"] if t["type"] == "page")
         attached = await self.cdp.call("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})
         self.page_session = attached["sessionId"]
+        with contextlib.suppress(RuntimeError, asyncio.TimeoutError):
+            await self.cdp.call('Media.enable', session=self.page_session)
         # This file and the control channel remain private; no VNC password
         # appears in process arguments, logs, MQTT, or persistent settings.
         self.stage = "preview"
@@ -197,7 +256,10 @@ class Worker:
 
     async def command(self, value):
         action = value["action"]
-        if action == "navigate":
+        if action == "diagnostics":
+            return await self.diagnostics()
+        elif action == "navigate":
+            self.media.clear()
             self.engine.arguments(["--url", value["url"], "--setup"])
             result = await self.cdp.call("Page.navigate", {"url": value["url"]}, self.page_session)
             if result.get("errorText"):
@@ -262,8 +324,8 @@ class Worker:
                 self.stop_event.set()
                 return
             try:
-                await self.command(value)
-                emit("reply", id=value["id"], ok=True)
+                result = await self.command(value)
+                emit("reply", id=value["id"], ok=True, data=result)
             except Exception:
                 emit("reply", id=value.get("id"), ok=False, code="browser_command_failed")
             finally:

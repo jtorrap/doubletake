@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+- Enable GPU video decoding on compatible Intel hosts, with a configuration toggle.
+- Include Intel VA-API drivers and grant the non-root browser mapped GPU access.
+- Add Check video to inspect codec support, playback and actual GPU video activity.
+- Keep the browser sandbox enabled and retain software H.264 AirPlay encoding.
+
 ## 0.1.2
 
 - Fix an unresponsive Paste button when a proxy serves an older app script.

@@ -173,6 +173,10 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     async def discover(_request):
         return web.json_response({"tvs": await discover_tvs()})
 
+    async def diagnostics(_request):
+        async with session.lock:
+            return web.json_response(await session.request("diagnostics"))
+
     async def preview_info(_request):
         if not session.preview:
             raise web.HTTPConflict(text="Open a page first")
@@ -242,6 +246,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     app.router.add_delete("/api/settings/{kind}/{item_id}", delete_item)
     app.router.add_post("/api/action/{operation}", action)
     app.router.add_post("/api/discover", discover)
+    app.router.add_post("/api/diagnostics", diagnostics)
     app.router.add_get("/api/preview", preview_info)
     app.router.add_get("/ws/preview", preview_socket)
     app.router.add_static("/static", Path(__file__).parent / "static")

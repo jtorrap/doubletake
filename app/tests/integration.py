@@ -87,6 +87,9 @@ def main():
             fixture.wait_for(lambda: fixture.Fixture.metrics.get('updates', 0) > 15 and fixture.Fixture.metrics.get('moving', 0) >= 3, 30, 'sandboxed live browser')
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
+            diagnostics = api('/api/diagnostics', {})
+            assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
+            assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
             fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
             api('/api/action/cast', {'page_id': page['id'], 'tv_id': tv['id']})
@@ -104,7 +107,7 @@ def main():
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake']), processes
-            result = {'sandbox_enabled': True, 'video_decoded': True, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
+            result = {'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
                       'masked_clipboard_paste_preserves_unicode_and_punctuation': True, 'paste_dialog_cleared': True,
                       'browser_version': subprocess.check_output(['docker', 'exec', 'doubletake-integration', 'google-chrome', '--version'], text=True).strip(),
                       'airplay_video_packets': max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())), 'profile_and_cookie_retained': True,

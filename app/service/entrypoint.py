@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import urllib.request
+from acceleration import drm_groups
 
 
 def supervisor(path, token):
@@ -41,11 +42,12 @@ def main():
     bootstrap.write_text(json.dumps({"port": port, "mqtt": mqtt, "quality": quality}))
     os.chown(bootstrap, 1000, 1000)
     token = ""
-    os.setgroups([])
+    os.setgroups(drm_groups())
     os.setgid(1000)
     os.setuid(1000)
     keep = {key: os.environ[key] for key in ("PATH", "LANG", "TZ") if key in os.environ}
-    keep.update(HOME="/home/browser", DOUBLETAKE_BROWSER="google-chrome")
+    keep.update(HOME="/home/browser", DOUBLETAKE_BROWSER="/opt/browser-app/acceleration.py",
+                DOUBLETAKE_HARDWARE_DECODING="true" if options.get("hardware_decoding", True) else "false")
     os.environ.clear()
     os.environ.update(keep)
     os.execv(sys.executable, [sys.executable, "-u", "-B", "/opt/browser-app/server.py"])

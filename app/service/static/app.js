@@ -34,6 +34,7 @@ function controls() {
   $('closeBrowser').disabled = busy || !ready;
   $('fullscreen').disabled = !ready;
   $('pasteText').disabled = busy || !ready || !rfb;
+  $('checkVideo').disabled = busy || !ready;
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
 }
 function renderItems(kind) {
@@ -147,5 +148,19 @@ $('discover').onclick=async()=>{
   }catch(error){$('discovered').textContent=error.message;}finally{$('discover').disabled=false;}
 };
 $('closeDiscovery').onclick=()=>$('discovery').close();
+$('closeVideo').onclick=()=>$('videoDialog').close();
+$('checkVideo').onclick=()=>run(async()=>{
+  $('videoSummary').textContent='Checking video decoding…'; $('videoDetails').textContent='';
+  $('videoDialog').showModal();
+  try {
+    const result=await api('api/diagnostics',{});
+    $('videoSummary').textContent=result.video_engine_active?'GPU video engine active':
+      !result.hardware_decoding_enabled?'Hardware decoding is switched off':
+      !result.render_nodes.length?'No accessible GPU found':
+      !result.vaapi_ready?'GPU driver could not initialize':
+      'GPU available · active hardware decoding not confirmed';
+    $('videoDetails').textContent=JSON.stringify(result,null,2);
+  } catch (error) { $('videoSummary').textContent='Video check unavailable. Try again.'; throw error; }
+});
 async function poll(){try{await refresh();}catch{showError('The app connection is unavailable. Retrying…');}setTimeout(poll,2000);}
 poll();

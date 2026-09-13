@@ -70,6 +70,20 @@ The HA app Configuration tab offers 1080p at 15 or 30 fps, or 720p at 30 fps.
 Changing this option requires an app restart. Start with the default 1080p/15
 and measure CPU load while displaying your actual cameras and charts.
 
+Hardware decoding is enabled by default when an accessible GPU is present.
+The app includes Intel's iHD VA-API driver and uses Supervisor's video device
+mapping. The non-root browser receives the device's existing group permissions;
+host device permissions are not changed. A VM must have its GPU passed through.
+The **hardware_decoding** option disables this path for troubleshooting and
+requires an app restart. HEVC needs compatible GPU, driver, and browser support.
+
+While a camera is playing, choose **Check video** below the preview. Available
+profiles establish capability; **GPU video engine active** establishes activity
+during the sample. Technical details include video frame counters, browser
+decoder properties when available, and container-local DRM activity. If activity
+cannot be observed, the check reports that it is unconfirmed. The check does not
+return page URLs, login fields, cookies, or raw browser logs.
+
 The initial implementation sends video only. It uses software H.264 encoding,
 an amd64 Google Chrome build with video codecs, Xvfb, and the existing doubletake
 AirPlay implementation. Host networking supports receiver discovery and the

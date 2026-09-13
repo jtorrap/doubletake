@@ -40,7 +40,7 @@ class Session:
                     future = self.pending.pop(value.get("id"), None)
                     if future and not future.done():
                         if value.get("ok"):
-                            future.set_result(True)
+                            future.set_result(value.get("data"))
                         else:
                             future.set_exception(ValueError("The browser could not complete that action"))
                 elif value.get("type") == "airplay":
@@ -80,7 +80,7 @@ class Session:
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
-        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER"] if key in os.environ}
+        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
         self.process = await asyncio.create_subprocess_exec(sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
         self.reader_task = asyncio.create_task(self.read_events(self.process))
@@ -105,7 +105,7 @@ class Session:
         try:
             self.process.stdin.write(json.dumps({"id": message_id, "action": action, **fields}).encode() + b"\n")
             await self.process.stdin.drain()
-            await asyncio.wait_for(future, 15)
+            return await asyncio.wait_for(future, 30 if action == "diagnostics" else 15)
         except (BrokenPipeError, ConnectionError, asyncio.TimeoutError):
             raise ValueError("The browser did not respond") from None
         finally:

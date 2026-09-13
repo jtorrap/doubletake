@@ -19,11 +19,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 --shell /usr/sbin/nologin browser
+RUN echo 'deb http://deb.debian.org/debian bookworm main non-free' > /etc/apt/sources.list.d/intel-media.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       intel-media-va-driver-non-free libva-drm2 vainfo libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=engine /doubletake /usr/local/bin/doubletake
 COPY --from=engine /src/scripts/doubletake-browser /opt/doubletake/launcher.py
 COPY service/ /opt/browser-app/
+RUN chmod 755 /opt/browser-app/acceleration.py
+ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.2" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.3" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM
