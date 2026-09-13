@@ -131,7 +131,8 @@ async def window_ready(env, browser):
 
 
 def point_click(env, point):
-    xdo(env, 'mousemove', '--sync', str(point['x']), str(point['y']), 'click', '1')
+    # --sync waits for pointer movement and can hang when already at this point.
+    xdo(env, 'mousemove', str(point['x']), str(point['y']), 'click', '1')
 
 
 async def native_text(env, fixture, value):

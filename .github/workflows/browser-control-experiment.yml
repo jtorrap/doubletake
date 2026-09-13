@@ -30,6 +30,9 @@ jobs:
             -v "$PWD/app/experiments:/experiment:ro" \
             -v "$PWD/artifacts/browser-control:/evidence" \
             doubletake-experiment -u -B /experiment/browser_control.py
+      - name: Return synthetic evidence ownership to the runner
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" artifacts/browser-control
       - uses: actions/upload-artifact@v4
         if: always()
         with:
