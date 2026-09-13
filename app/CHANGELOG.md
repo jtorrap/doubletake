@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+- Always report a dark color preference to websites.
+- Set the default browser zoom to 120% while retaining per-site overrides.
+- Include output resolution, page zoom and color preference in Check video.
+
 ## 0.1.4
 
 - Use ANGLE's Vulkan renderer for GPU decoding with the virtual display.

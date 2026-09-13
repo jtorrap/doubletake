@@ -88,6 +88,9 @@ def main():
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
             diagnostics = api('/api/diagnostics', {})
+            assert diagnostics['display'] == {'width':1920, 'height':1080, 'fps':15,
+                                              'css_width':1600, 'css_height':900,
+                                              'page_zoom_percent':120, 'prefers_dark':True}, diagnostics['display']
             assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
             assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
@@ -104,6 +107,7 @@ def main():
             fixture.wait_for(lambda: fixture.Fixture.metrics.get('updates', 0) > 10, 20, 'reopened browser')
             assert fixture.Fixture.metrics['profileToken'] == token
             assert fixture.Fixture.metrics['hadProfile'] and fixture.Fixture.metrics['hadCookie']
+            assert api('/api/diagnostics', {})['display'] == diagnostics['display'], 'Display defaults changed on reopen'
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake']), processes

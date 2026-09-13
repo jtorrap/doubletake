@@ -21,6 +21,7 @@ import tempfile
 import time
 from model import browser_text
 from acceleration import gpu_info, va_capabilities, video_engine_counters
+from browser_preferences import prepare_profile
 
 
 def load_engine():
@@ -146,16 +147,22 @@ class Worker:
               }
               if (element.shadowRoot) visit(element.shadowRoot);
             }
-          }; visit(document); return videos.slice(0,16);
+          }; visit(document); return {videos:videos.slice(0,16),
+            display:{css_width:innerWidth,css_height:innerHeight,
+              page_zoom_percent:Math.round(devicePixelRatio*100),
+              prefers_dark:matchMedia('(prefers-color-scheme: dark)').matches}};
         })()'''
         videos = await self.cdp.call('Runtime.evaluate', {'expression': expression, 'returnByValue': True}, self.page_session)
+        page = videos.get('result', {}).get('value', {})
         return {**capabilities, **info,
+                'display': {'width': self.engine_config['width'], 'height': self.engine_config['height'],
+                            'fps': self.engine_config['fps'], **page.get('display', {})},
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
                 'video_engine_observable': bool(common),
                 'video_engine_active': video_ns > 0,
                 'video_engine_busy_percent': round(video_ns / elapsed * 100, 2) if common else None,
                 'players': [p for p in self.media.values() if p],
-                'videos': videos.get('result', {}).get('value', [])}
+                'videos': page.get('videos', [])}
 
     async def start(self, runtime):
         args = self.engine.arguments(["--url", self.config["url"], "--setup", "--state-dir", self.config["profile_dir"]])
@@ -173,6 +180,7 @@ class Worker:
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
+        prepare_profile(Path(self.config['profile_dir']) / 'profile')
         self.browser, self.command_fd, self.response_fd = self.engine.start_browser(self.engine_config, bootstrap, self.environment)
         self.cdp = CDP(self.command_fd, self.response_fd, self.media_event)
         deadline = time.monotonic() + 35

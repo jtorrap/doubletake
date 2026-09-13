@@ -18,7 +18,8 @@ const fs = require('fs');
     const canvas = page.locator('#screen canvas');
     await canvas.scrollIntoViewIfNeeded();
     const box = await canvas.boundingBox();
-    await page.mouse.click(box.x + box.width * 180/1920, box.y + box.height * 570/1080);
+    // Remote page coordinates include its actual 120% browser zoom.
+    await page.mouse.click(box.x + box.width * (180*1.2)/1920, box.y + box.height * (570*1.2)/1080);
     await page.keyboard.type('keyboard works');
     // Exercise an actual paste into the app's masked dialog, followed by
     // Unicode insertion into the focused field in the separate app browser.
@@ -36,7 +37,7 @@ const fs = require('fs');
     if (await page.locator('#pasteValue').inputValue() !== '') throw Error('Paste dialog retained text');
     await canvas.scrollIntoViewIfNeeded();
     const afterPaste = await canvas.boundingBox();
-    await page.mouse.click(afterPaste.x + afterPaste.width * 140/1920, afterPaste.y + afterPaste.height * 637/1080);
+    await page.mouse.click(afterPaste.x + afterPaste.width * (140*1.2)/1920, afterPaste.y + afterPaste.height * (637*1.2)/1080);
     await page.getByRole('button', {name:'Paste', exact:true}).click();
     await input.fill('cancelled fixture');
     await page.getByRole('button', {name:'Cancel paste', exact:true}).click();

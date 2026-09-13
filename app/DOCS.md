@@ -70,6 +70,13 @@ The HA app Configuration tab offers 1080p at 15 or 30 fps, or 720p at 30 fps.
 Changing this option requires an app restart. Start with the default 1080p/15
 and measure CPU load while displaying your actual cameras and charts.
 
+The browser always reports a dark color preference and defaults to 120% page
+zoom. Websites with automatic dark themes use that preference; a website's
+explicit theme setting can still take precedence. Per-site zoom overrides are
+retained. At 1080p, the output remains 1920 by 1080 pixels and the default page
+layout uses approximately 1600 by 900 CSS pixels. **Check video** includes the
+actual output resolution, page zoom, and reported color preference.
+
 Hardware decoding is enabled by default when an accessible GPU is present.
 The app includes Intel's iHD VA-API driver and uses Supervisor's video device
 mapping. The non-root browser receives the device's existing group permissions;
