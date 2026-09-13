@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -112,6 +113,7 @@ def stop(process):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser-sandbox", action="store_true", help="CI-only browser sandbox exception for synthetic content")
+    parser.add_argument("--browser", help="explicit browser for a reproducible fixture")
     args = parser.parse_args()
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     receiver = browser = None
@@ -141,6 +143,11 @@ def main():
                 command = [sys.executable, "-B", str(ROOT / "scripts/doubletake-browser"), "--url", f"http://127.0.0.1:{server.server_port}/", "--state-dir", str(work / "state"), "--sender", str(ROOT / "bin/doubletake"), "--width", "1280", "--height", "720", "--fps", "15", "--hwaccel", "none"]
                 if args.no_browser_sandbox:
                     command.append("--no-browser-sandbox")
+                if args.browser:
+                    command.extend(["--browser", args.browser])
+                selected_browser = args.browser or next(n for n in ["chromium", "chromium-browser", "google-chrome"] if shutil.which(n))
+                print("Browser: " + selected_browser, flush=True)
+                subprocess.run([selected_browser, "--version"], check=True)
                 setup_port = free_port()
                 browser = subprocess.Popen(command + ["--setup", "--setup-port", str(setup_port)], stdout=browser_log, stderr=subprocess.STDOUT)
                 setup = wait_for(lambda: status("setup"), 50, "private setup browser")

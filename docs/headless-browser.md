@@ -65,7 +65,8 @@ open vnc://localhost:15900
 Sign in through Home Assistant's normal browser flow and check that the intended
 dashboard, charts, and cameras are visible. Then stop the setup command with
 Ctrl-C before streaming. No VNC service or remote debugging port is started in
-normal streaming mode. The loopback VNC endpoint has no additional password;
+normal streaming mode. A local Chromium control pipe is used only for graceful
+shutdown so cookies and browser storage can be saved. The loopback VNC endpoint has no additional password;
 use a dedicated VM/user and the SSH tunnel, and leave it running only for setup.
 TLS errors are never bypassed; install the appropriate CA trust if required.
 

@@ -122,8 +122,44 @@ def browser_command(config, bootstrap):
             "--disable-session-crashed-bubble", "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
             "--autoplay-policy=no-user-gesture-required",
+            "--remote-debugging-pipe",
             *( ["--no-sandbox"] if config["no_browser_sandbox"] else [] ),
             "--app=" + bootstrap.as_uri()]
+
+
+def start_browser(config, bootstrap, env):
+    command_read, command_write = os.pipe()
+    response_read, response_write = os.pipe()
+
+    def connect_pipe():
+        # Chromium's local debugging pipe uses descriptors 3 and 4. This
+        # launcher is single-threaded; no network debugging listener exists.
+        os.dup2(command_read, 3)
+        os.dup2(response_write, 4)
+
+    try:
+        browser = subprocess.Popen(browser_command(config, bootstrap), env=env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   pass_fds=tuple({3, 4, command_read, response_write}),
+                                   preexec_fn=connect_pipe, start_new_session=True)
+        return browser, command_write, response_read
+    except BaseException:
+        os.close(command_write)
+        os.close(response_read)
+        raise
+    finally:
+        os.close(command_read)
+        os.close(response_write)
+
+
+def close_browser(browser, command_fd):
+    if browser is not None and browser.poll() is None:
+        # Browser.close flushes cookies/profile data and lets Chromium stop
+        # its own children before the final process-group cleanup.
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            os.write(command_fd, b'{"id":1,"method":"Browser.close"}\0')
+            browser.wait(timeout=8)
+    stop(browser)
 
 
 def start_display(config, runtime):
@@ -214,6 +250,7 @@ def stopping(_signum, _frame):
 
 def session(config, runtime, display, env):
     browser = sender = vnc = None
+    browser_command_fd = browser_response_fd = None
     try:
         bootstrap = Path(runtime) / "launch.html"
         # Keep private dashboard URLs out of Chromium's process arguments and
@@ -221,8 +258,7 @@ def session(config, runtime, display, env):
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(config["url"], quote=True) + '"><title>Opening dashboard</title>')
         browser_env = dict(env)
         browser_env.pop("DOUBLETAKE_CODE", None)
-        browser = subprocess.Popen(browser_command(config, bootstrap), env=browser_env,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        browser, browser_command_fd, browser_response_fd = start_browser(config, bootstrap, browser_env)
         deadline = time.monotonic() + 40
         window = None
         while time.monotonic() < deadline:
@@ -262,8 +298,12 @@ def session(config, runtime, display, env):
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        for process in [sender, vnc, browser]:
+        for process in [sender, vnc]:
             stop(process)
+        close_browser(browser, browser_command_fd)
+        for fd in [browser_command_fd, browser_response_fd]:
+            if fd is not None:
+                os.close(fd)
         write_status(config["state_dir"], phase="stopped")
 
 

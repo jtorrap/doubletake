@@ -45,7 +45,8 @@ class BrowserTests(unittest.TestCase):
         config["url"] += "?secret=private-value"
         command = launcher.browser_command(config, Path("/tmp/private/launch.html"))
         self.assertNotIn("--no-sandbox", command)
-        self.assertFalse(any("remote-debugging" in arg for arg in command))
+        self.assertFalse(any("remote-debugging-port" in arg for arg in command))
+        self.assertIn("--remote-debugging-pipe", command)
         self.assertNotIn("private-value", " ".join(command))
         self.assertIn("--ozone-platform=x11", command)
 
