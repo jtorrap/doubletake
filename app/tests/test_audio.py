@@ -11,9 +11,39 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 from audio import BrowserAudio, SINK
+from audio_runtime import check_unix_sockets
 
 
 class BrowserAudioTests(unittest.TestCase):
+    def test_unix_listener_audit_allows_accepted_connections_at_same_private_path(self):
+        expected = '/tmp/private/audio/native'
+        rows = [line.split(maxsplit=7) for line in [
+            '00000000: 00000002 00000000 00010000 0001 01 101 ' + expected,
+            '00000000: 00000003 00000000 00000000 0001 03 102 ' + expected,
+            '00000000: 00000003 00000000 00000000 0001 03 103 ' + expected,
+            '00000000: 00000003 00000000 00000000 0001 03 104',
+            '00000000: 00000002 00000000 00010000 0001 01 999 /other/process/socket',
+        ]]
+        report = check_unix_sockets(rows, {'101', '102', '103', '104'}, expected)
+        self.assertEqual(report['unix_listeners'], 1)
+        self.assertEqual(report['private_socket_rows'], 3)
+        self.assertEqual(report['unexpected_named_sockets'], 0)
+
+    def test_unix_listener_audit_rejects_exposed_or_additional_endpoints(self):
+        expected = '/tmp/private/audio/native'
+        private = ('00000000: 00000002 00000000 00010000 0001 01 101 ' + expected).split()
+        for extra in [
+            '00000000: 00000002 00000000 00010000 0001 01 102 @exposed',
+            '00000000: 00000002 00000000 00010000 0001 01 102 /unintended/socket',
+            '00000000: 00000002 00000000 00010000 0001 01 102',
+            '00000000: 00000003 00000000 00000000 0001 03 102 @exposed',
+            '00000000: 00000003 00000000 00000000 0001 03 102 /unintended/socket with spaces',
+        ]:
+            with self.subTest(extra=extra), self.assertRaises(AssertionError):
+                check_unix_sockets([private, extra.split(maxsplit=7)], {'101', '102'}, expected)
+        with self.assertRaises(AssertionError):
+            check_unix_sockets([], set(), expected)
+
     def test_private_sink_environment_replaces_inherited_audio_endpoints(self):
         with tempfile.TemporaryDirectory() as runtime:
             base = {'DISPLAY': ':10', 'PULSE_SERVER': 'tcp:host:4713',

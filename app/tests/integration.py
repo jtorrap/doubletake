@@ -150,8 +150,14 @@ def main():
             remaining_packets = packets(1)
             fixture.wait_for(lambda: packets(1) > remaining_packets+30, 10, 'second receiver survives first Stop')
             # Reconnect one while the other stays up, then fail that process.
+            before_rejoin_frames = [frames(i) for i in range(2)]
+            before_rejoin_audio = [packets(i, 'audio_rtp') for i in range(2)]
             api('/api/action/cast', {'page_id':second['id'], 'tv_ids':ids})
             fixture.wait_for(both_sending, 30, 'rejoin while other receiver sends')
+            fixture.wait_for(lambda: all(frames(i) > before_rejoin_frames[i]+30 and
+                                        packets(i, 'audio_rtp') > before_rejoin_audio[i]+100 for i in range(2)),
+                             20, 'fresh video and audio after receiver rejoin')
+            assert all(value['audio'] == 'active' for value in api('/api/state')['runtime']['receivers'].values())
             fixture.stop(receivers[0])
             fixture.wait_for(lambda: api('/api/state')['runtime']['receivers'][tv['id']]['state'] == 'error', 45, 'targeted receiver failure')
             assert api('/api/state')['runtime']['receivers'][tv2['id']]['state'] == 'sending'

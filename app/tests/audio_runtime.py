@@ -66,6 +66,27 @@ def sample_monitor(environment):
         process.stdout.close()
 
 
+def check_unix_sockets(rows, inodes, expected):
+    # Linux copies a UNIX listener's address onto accepted server sockets.
+    # /proc/net/unix therefore repeats the pathname for Chrome connections;
+    # only the Flags field's __SO_ACCEPTCON bit identifies a listener.
+    owned = [row for row in rows if len(row) >= 7 and row[6] in inodes]
+    listeners = [row for row in owned if int(row[3], 16) & 0x10000]
+    named = [row for row in owned if len(row) == 8]
+    report = {
+        'unix_listeners': len(listeners),
+        'private_socket_rows': sum(row[7] == expected for row in named),
+        'unexpected_named_sockets': sum(row[7] != expected for row in named),
+        'abstract_sockets': sum(row[7].startswith('@') for row in named),
+        'expected_private_listener': len(listeners) == 1 and len(listeners[0]) == 8
+                                     and listeners[0][7] == expected
+                                     and int(listeners[0][4], 16) == 1,
+    }
+    assert report['expected_private_listener'] and not report['unexpected_named_sockets'], (
+        'PulseAudio UNIX socket audit failed: ' + json.dumps(report, sort_keys=True))
+    return report
+
+
 def main():
     runtimes = list(Path('/tmp').glob('doubletake-app-*'))
     assert len(runtimes) == 1, 'Fixture must own exactly one browser runtime'
@@ -98,18 +119,24 @@ def main():
         except FileNotFoundError:
             pass  # Unrelated short-lived Chrome processes may exit mid-listing.
     assert len(processes) == 1
-    inodes = {link[8:-1] for fd in (processes[0] / 'fd').iterdir()
-              if (link := os.readlink(fd)).startswith('socket:[')}
+    inodes = set()
+    for fd in (processes[0] / 'fd').iterdir():
+        try:
+            link = os.readlink(fd)
+        except FileNotFoundError:
+            continue  # A completed pactl connection can close during the audit.
+        if link.startswith('socket:['):
+            inodes.add(link[8:-1])
     network_inodes = set()
     for name in ['tcp', 'tcp6', 'udp', 'udp6', 'raw', 'raw6']:
         network_inodes.update(line.split()[9] for line in (Path('/proc/net') / name).read_text().splitlines()[1:])
     assert not inodes & network_inodes, 'PulseAudio owns an IP network socket'
-    unix = [line.split() for line in Path('/proc/net/unix').read_text().splitlines()[1:]]
-    bound_paths = [row[7] for row in unix if row[6] in inodes and len(row) == 8]
-    assert bound_paths == [str(sock)], 'PulseAudio bound an unexpected UNIX socket'
+    unix = [line.split(maxsplit=7) for line in Path('/proc/net/unix').read_text().splitlines()[1:]]
+    socket_report = check_unix_sockets(unix, inodes, str(sock))
     print(json.dumps({'private_filesystem_socket': True, 'cookie_authentication': True,
                       'no_host_devices_or_network_listener': True,
-                      'browser_connected_to_private_sink': True, **sample_monitor(environment)}))
+                      'browser_connected_to_private_sink': True,
+                      'socket_audit': socket_report, **sample_monitor(environment)}))
 
 
 if __name__ == '__main__':
