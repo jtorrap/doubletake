@@ -1,10 +1,12 @@
 # Doubletake Browser
 
-Open a real browser from Home Assistant and send its view to a saved Apple TV.
+Open a real browser from Home Assistant and send its view and audio to saved Apple TVs.
 The interactive preview supports signing in, clicking, typing, and navigating.
 Named pages appear as launch buttons under each TV's Home Assistant device.
 
-This initial release supports one browser page and one TV at a time, on amd64
-Home Assistant hosts. A working MQTT service is required.
+One shared browser page can play on several TVs at once, with separate connection,
+pairing, and Stop controls. The default output is 1080p at 30 fps. The interactive
+preview is silent; audio plays on the TVs. The app runs on amd64 Home Assistant
+hosts and requires a working MQTT service.
 
 See [usage and deployment](DOCS.md) and the [implementation plan](PLAN.md).

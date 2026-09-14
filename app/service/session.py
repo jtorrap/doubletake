@@ -21,14 +21,47 @@ class Session:
         self.control_mode = os.environ.get('DOUBLETAKE_BROWSER_CONTROL', 'native')
         if self.control_mode not in {'native', 'diagnostic'}:
             raise ValueError('Unknown browser control mode')
-        self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "error": None}
+        self.audio_enabled = os.environ.get('DOUBLETAKE_AUDIO', 'true') == 'true'
+        self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "receivers": {}, "error": None}
 
     def state(self):
-        return {**self.runtime, 'control_mode': self.control_mode}
+        return {**self.runtime, 'receivers': {key: dict(value) for key, value in self.runtime['receivers'].items()},
+                'control_mode': self.control_mode,
+                'display': {key: self.quality.get(key, default) for key, default in [('width', 1920), ('height', 1080), ('fps', 30)]},
+                'audio_enabled': self.audio_enabled}
 
     def update(self, **fields):
         self.runtime.update(fields)
         self.notify()
+
+    def set_receivers(self, receivers):
+        # Keep the original single-TV fields for older API consumers. The map
+        # is authoritative; one failed TV must not hide another sending TV.
+        states = {value['state'] for value in receivers.values()}
+        airplay = next((state for state in ('sending', 'pairing', 'starting', 'error') if state in states), 'idle')
+        tv_id = next((key for key, value in receivers.items() if value['state'] == airplay), None)
+        self.update(receivers=receivers, tv_id=tv_id, airplay=airplay)
+
+    def receiver_event(self, value):
+        tv_id, state = value.get('tv_id'), value.get('state')
+        # The worker always identifies the TV. Ignore late events after Stop
+        # and never apply an unidentified event to an arbitrary receiver.
+        if tv_id not in self.runtime['receivers'] or state not in {'starting', 'pairing', 'sending', 'error'}:
+            return
+        receivers = dict(self.runtime['receivers'])
+        receivers[tv_id] = {**receivers[tv_id], 'state': state, 'error': 'The TV connection ended. Try Show again.' if state == 'error' else None}
+        if state == 'error' and self.audio_enabled:
+            receivers[tv_id]['audio'] = 'error'
+        self.set_receivers(receivers)
+
+    def audio_event(self, value):
+        tv_id, state = value.get('tv_id'), value.get('state')
+        if tv_id not in self.runtime['receivers'] or state not in {'starting', 'active', 'unavailable', 'error', 'disabled'}:
+            return
+        self.set_receivers({**self.runtime['receivers'], tv_id: {**self.runtime['receivers'][tv_id], 'audio': state}})
+
+    def receivers_failed(self):
+        self.set_receivers({tv_id: {'state': 'error', 'error': 'The browser session ended.', 'audio': 'error' if self.audio_enabled else 'disabled'} for tv_id in self.runtime['receivers']})
 
     async def read_events(self, process):
         try:
@@ -47,12 +80,14 @@ class Session:
                         else:
                             future.set_exception(ValueError("The browser could not complete that action"))
                 elif value.get("type") == "airplay":
-                    if value.get("state") in {"pairing", "sending", "error"}:
-                        self.update(airplay=value["state"], error="The TV connection ended. Try Show again." if value["state"] == "error" else None)
+                    self.receiver_event(value)
+                elif value.get('type') == 'audio':
+                    self.audio_event(value)
                 elif value.get("type") == "fatal":
                     stage = value.get("stage")
-                    detail = " (" + stage + ")" if stage in {"dependencies", "display", "browser", "browser control", "preview"} else ""
-                    self.update(browser="error", airplay="error" if self.runtime["tv_id"] else "idle", error="The browser session could not run" + detail + ". Check app health and browser sandbox support.")
+                    detail = " (" + stage + ")" if stage in {"dependencies", "display", "audio", "browser", "browser control", "preview"} else ""
+                    self.receivers_failed()
+                    self.update(browser="error", error="The browser session could not run" + detail + ". Check app health and browser sandbox support.")
                     if not self.ready.done():
                         self.ready.set_exception(ValueError("The browser could not start"))
         except (OSError, ValueError, KeyError, TypeError):
@@ -66,12 +101,14 @@ class Session:
                 self.ready.set_exception(ValueError("The browser could not start"))
             if self.process is process and self.runtime["browser"] != "closed":
                 self.preview = None
-                self.update(browser="error", airplay="error" if self.runtime["tv_id"] else "idle")
+                self.receivers_failed()
+                self.update(browser="error")
 
     async def ensure(self, page):
         if self.process and self.process.returncode is None and self.preview:
             return False
         await self.close_worker()
+        self.set_receivers({})
         self.update(browser="starting", error=None)
         config = {"url": page["url"], "quality": self.quality, "control_mode": self.control_mode,
                   "profile_dir": str(self.directory / "browser"), "receivers_dir": str(self.directory / "receivers")}
@@ -83,7 +120,7 @@ class Session:
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
-        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING"] if key in os.environ}
+        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_AUDIO"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
         command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
@@ -117,25 +154,59 @@ class Session:
 
     async def open(self, page, receiver=None, *, preserve_view=False):
         async with self.lock:
-            created = await self.ensure(page)
-            # The UI's Show action sends the view the user is interacting with.
-            # MQTT launch buttons always open their configured URL explicitly.
-            if not created and not (preserve_view and self.runtime["page_id"] == page["id"]):
-                await self.request("navigate", url=page["url"])
-            self.update(page_id=page["id"], error=None)
-            if receiver and (self.runtime["tv_id"] != receiver["id"] or self.runtime["airplay"] not in {"starting", "pairing", "sending"}):
-                # One sender is replaced only after the prior one stops.
-                self.update(tv_id=receiver["id"], airplay="starting")
-                await self.request("cast", receiver=receiver)
+            await self.open_page(page, preserve_view=preserve_view)
+            if receiver:
+                await self.add_receiver(receiver)
+
+    async def open_page(self, page, *, preserve_view):
+        """Open the one shared page; caller holds the session lock."""
+        created = await self.ensure(page)
+        if not created and not (preserve_view and self.runtime['page_id'] == page['id']):
+            await self.request('navigate', url=page['url'])
+        self.update(page_id=page['id'], error=None)
+
+    async def add_receiver(self, receiver):
+        """Add or retry a receiver without interrupting its peers."""
+        tv_id = receiver['id']
+        current = self.runtime['receivers'].get(tv_id, {})
+        if current.get('state') in {'starting', 'pairing', 'sending'}:
+            return
+        self.set_receivers({**self.runtime['receivers'], tv_id: {'state': 'starting', 'error': None, 'audio': 'starting' if self.audio_enabled else 'disabled'}})
+        try:
+            await self.request('cast', receiver=receiver)
+        except (ValueError, OSError):
+            self.receiver_event({'tv_id': tv_id, 'state': 'error'})
+            raise
+
+    async def cast(self, page, receivers):
+        """Reconcile the UI's explicit selection against connected TVs."""
+        async with self.lock:
+            await self.open_page(page, preserve_view=True)
+            desired = {receiver['id'] for receiver in receivers}
+            for tv_id in list(self.runtime['receivers']):
+                if tv_id not in desired:
+                    await self.stop_receiver(tv_id)
+            # Attempt every selected TV even when one connection fails.
+            failed = False
+            for receiver in receivers:
+                try:
+                    await self.add_receiver(receiver)
+                except (ValueError, OSError):
+                    failed = True
+            if failed:
+                raise ValueError('One or more TVs could not connect')
 
     async def stop(self, tv_id=None):
         async with self.lock:
-            # A Stop button for an inactive TV must not stop another TV.
-            if tv_id is not None and tv_id != self.runtime["tv_id"]:
-                return
-            if self.process and self.process.returncode is None:
-                await self.request("stop")
-            self.update(tv_id=None, airplay="idle", error=None)
+            await self.stop_receiver(tv_id)
+
+    async def stop_receiver(self, tv_id=None):
+        """Stop one TV or every TV; caller holds the session lock."""
+        if tv_id is not None and tv_id not in self.runtime['receivers']:
+            return
+        if self.process and self.process.returncode is None:
+            await self.request('stop', **({'tv_id': tv_id} if tv_id is not None else {}))
+        self.set_receivers({key: value for key, value in self.runtime['receivers'].items() if tv_id is not None and key != tv_id})
 
     async def browser_action(self, action):
         async with self.lock:
@@ -148,12 +219,20 @@ class Session:
                 raise ValueError("Open a page first")
             await self.request("insert_text", value=value)
 
-    async def pin(self, value):
+    async def pin(self, value, tv_id=None):
         async with self.lock:
-            if self.runtime["airplay"] != "pairing":
+            pairing = [key for key, receiver in self.runtime['receivers'].items() if receiver['state'] == 'pairing']
+            if tv_id is None:
+                if len(pairing) != 1:
+                    raise ValueError('Choose the TV waiting for a pairing code')
+                tv_id = pairing[0]
+            if tv_id not in pairing:
                 raise ValueError("The TV is not waiting for a pairing code")
-            await self.request("pin", value=value)
-            self.update(airplay="starting", error=None)
+            await self.request("pin", tv_id=tv_id, value=value)
+            # A fast worker may already have reported sending while its reply
+            # was in flight; do not regress that state to starting.
+            if self.runtime['receivers'].get(tv_id, {}).get('state') == 'pairing':
+                self.receiver_event({'tv_id': tv_id, 'state': 'starting'})
 
     async def close_worker(self):
         process = self.process
@@ -175,4 +254,4 @@ class Session:
     async def close(self):
         async with self.lock:
             await self.close_worker()
-            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, error=None)
+            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, receivers={}, error=None)

@@ -54,7 +54,7 @@ async def discover_tvs():
 def create_app(directory, settings, *, development=False, session_factory=Session):
     store = Store(directory)
     csrf = secrets.token_urlsafe(32)
-    session = session_factory(directory, settings.get("quality", {"width": 1920, "height": 1080, "fps": 15, "bitrate": 6000, "hwaccel": "none"}))
+    session = session_factory(directory, settings.get("quality", {"width": 1920, "height": 1080, "fps": 30, "bitrate": 8000, "hwaccel": "none"}))
     bridge = None
     novnc = Path(settings.get("novnc", "/usr/share/novnc"))
     static = Path(__file__).parent / "static"
@@ -120,7 +120,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         value = await request.json()
         item_id = request.match_info.get("item_id")
         # Changing an active receiver address requires a fresh connection.
-        if kind == "tvs" and item_id is not None and item_id == session.runtime["tv_id"]:
+        if kind == "tvs" and item_id is not None and item_id in session.runtime["receivers"]:
             old = store.get(kind, item_id)
             normalized = store.validate(kind, value)
             if old["host"] != normalized["host"] or old["port"] != normalized["port"]:
@@ -146,13 +146,29 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
 
     async def action(request):
         body = await request.json()
+        if not isinstance(body, dict):
+            raise ValueError()
         operation = request.match_info["operation"]
         if operation in {"open", "cast"}:
             page = store.get("pages", body.get("page_id"))
-            tv = store.get("tvs", body.get("tv_id")) if operation == "cast" else None
-            await session.open(page, tv, preserve_view=operation == "cast")
+            if operation == 'open':
+                await session.open(page)
+            else:
+                if 'tv_ids' in body:
+                    tv_ids = body['tv_ids']
+                    if 'tv_id' in body or not isinstance(tv_ids, list) or not tv_ids or any(not isinstance(tv_id, str) for tv_id in tv_ids) or len(tv_ids) != len(set(tv_ids)):
+                        raise ValueError()
+                else:
+                    tv_ids = [body.get('tv_id')]
+                # Resolve the entire selection before opening a page or
+                # disconnecting a TV. A stale ID must not partially apply.
+                receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
+                await session.cast(page, receivers)
         elif operation == "stop":
-            await session.stop()
+            tv_id = body.get('tv_id')
+            if tv_id is not None:
+                store.get('tvs', tv_id)
+            await session.stop(tv_id)
         elif operation == "close":
             await session.close()
         elif operation == "browser":
@@ -160,7 +176,13 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                 raise ValueError()
             await session.browser_action(body["action"])
         elif operation == "pin":
-            await session.pin(body.get("value"))
+            tv_id = body.get('tv_id')
+            if tv_id is not None:
+                store.get('tvs', tv_id)
+            try:
+                await session.pin(body.get("value"), tv_id)
+            finally:
+                body.clear()
         elif operation == "insert_text":
             try:
                 await session.insert_text(body.get("value"))
@@ -219,11 +241,16 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         try:
             tv = store.get("tvs", tv_id)
             if command["action"] == "cast":
-                await session.open(store.get("pages", command.get("page_id")), tv)
+                # A second TV joins the currently viewed page without
+                # resetting playback or a user's navigation on that page.
+                await session.open(store.get("pages", command.get("page_id")), tv, preserve_view=True)
             else:
                 await session.stop(tv_id)
         except (ValueError, OSError):
-            session.update(error="The Home Assistant command could not complete; open the app to check the browser")
+            # Connection failures already belong to the affected TV. Keep a
+            # healthy peer's browser-level status clear.
+            if session.runtime['receivers'].get(tv_id, {}).get('state') != 'error':
+                session.update(error="The Home Assistant command could not complete; open the app to check the browser")
 
     async def lifecycle(_app):
         nonlocal bridge

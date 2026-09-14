@@ -87,7 +87,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.close()
 
-    async def test_one_browser_switches_senders_and_inactive_stop_is_ignored(self):
+    async def test_one_browser_keeps_senders_and_inactive_stop_is_ignored(self):
         session = SimulatedSession('/unused', {})
         page = {'id': 'page', 'url': 'https://example.com/'}
         await session.open(page, {'id': 'tv1'})
@@ -95,8 +95,11 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.starts, 1)
         self.assertEqual([v[1]['receiver']['id'] for v in session.commands if v[0] == 'cast'], ['tv1', 'tv2'])
         count = len(session.commands)
-        await session.stop('tv1')
+        await session.stop('inactive')
         self.assertEqual(len(session.commands), count)
+        await session.stop('tv1')
+        self.assertEqual(session.commands[-1], ('stop', {'tv_id': 'tv1'}))
+        self.assertEqual(set(session.runtime['receivers']), {'tv2'})
         await session.stop('tv2')
         self.assertEqual(session.runtime['browser'], 'ready')
         self.assertIsNone(session.runtime['tv_id'])
@@ -135,7 +138,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.close()
 
-    async def test_ui_cast_preserves_interaction_but_mqtt_reopens_saved_url(self):
+    async def test_explicit_open_reloads_while_preserve_view_keeps_interaction(self):
         session = SimulatedSession('/unused', {})
         page = {'id': 'page', 'url': 'https://example.com/'}
         await session.open(page)

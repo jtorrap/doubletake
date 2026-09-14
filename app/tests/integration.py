@@ -57,27 +57,33 @@ class Fixture(fixture.Fixture):
 def main():
     global csrf
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    fixture.PAGE = fixture.PAGE.replace(b'<video muted autoplay', b'<video autoplay')
     fixture.PAGE = fixture.PAGE.replace(b'profileToken,hadProfile,hadCookie', b'''profileToken,hadProfile,hadCookie,path:location.pathname,webdriver:navigator.webdriver,
       css_width:innerWidth,css_height:innerHeight,zoom:Math.round(devicePixelRatio*100),dark:matchMedia('(prefers-color-scheme: dark)').matches''')
     fixture.PAGE += b'''<input id="entry" style="position:fixed;left:32px;top:550px;width:350px;height:40px;font-size:24px" placeholder="Test remote keyboard">
 <button style="position:fixed;left:32px;top:615px;width:250px;height:45px;font-size:24px" onclick="fetch('/input',{method:'POST',body:JSON.stringify({clicked:true,typed:document.querySelector('#entry').value})})">Test remote click</button>'''
-    receiver = None
+    receivers = []
     with tempfile.TemporaryDirectory(prefix='app-integration-') as directory:
         work = Path(directory)
         state = work / 'state'
         state.mkdir()
         subprocess.run(['sudo', 'chown', '1000:1000', str(state)], check=True)
         clip = work / 'clip.mp4'
-        subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=15', '-t', '4', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(clip)], check=True)
+        subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '2', '-movflags', '+faststart', str(clip)], check=True)
         Fixture.clip = clip.read_bytes()
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        receiver_port = fixture.free_port()
-        log = ARTIFACTS / 'receiver.log'
+        receiver_ports = [fixture.free_port(), fixture.free_port()]
+        logs = [ARTIFACTS / 'receiver-alac.log', ARTIFACTS / 'receiver-aac-eld.log']
+        def packets(index, kind='video'):
+            return max([int(v) for v in re.findall(kind+r'=(\d+)/', logs[index].read_text())] or [0])
+        def frames(index):
+            return max([int(v) for v in re.findall(r'video_frames=(\d+)', logs[index].read_text())] or [0])
         try:
-            with log.open('w') as output:
-                receiver = subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{receiver_port}', '-profile', 'uxplay', '-stats-interval', '1s'], stdout=output, stderr=subprocess.STDOUT)
-            fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
+            for port, log, profile in zip(receiver_ports, logs, ['uxplay', 'airserver']):
+                with log.open('w') as output:
+                    receivers.append(subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{port}', '-profile', profile, '-stats-interval', '200ms'], stdout=output, stderr=subprocess.STDOUT))
+                fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
             subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '-v', f'{ROOT / "app/tests"}:/testsource:ro', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
             def ready():
                 try:
@@ -86,13 +92,14 @@ def main():
                     return None
             csrf = fixture.wait_for(ready, 15, 'app API')['csrf']
             page = api('/api/settings/pages', {'name': 'Live dashboard', 'url': f'http://127.0.0.1:{server.server_port}/'})
-            tv = api('/api/settings/tvs', {'name': 'Test TV', 'host': '127.0.0.1', 'port': receiver_port})
+            tv = api('/api/settings/tvs', {'name': 'Test TV', 'host': '127.0.0.1', 'port': receiver_ports[0]})
+            tv2 = api('/api/settings/tvs', {'name': 'Second TV', 'host': '127.0.0.1', 'port': receiver_ports[1]})
             api('/api/action/open', {'page_id': page['id']})
             fixture.wait_for(lambda: fixture.Fixture.metrics.get('updates', 0) > 15 and fixture.Fixture.metrics.get('moving', 0) >= 3, 30, 'sandboxed live browser')
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
             diagnostics = api('/api/diagnostics', {})
-            expected_display = {'width':1920, 'height':1080, 'fps':15}
+            expected_display = {'width':1920, 'height':1080, 'fps':30}
             if CONTROL == 'diagnostic':
                 expected_display.update({
                                               'css_width':1600, 'css_height':900,
@@ -103,26 +110,53 @@ def main():
             assert metrics['webdriver'] == (CONTROL == 'diagnostic'), metrics
             assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1600,900,120,True)
             assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
+            assert diagnostics['audio_enabled'] and diagnostics['audio']['ready'], diagnostics
+            audio_checks = json.loads(subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/audio_runtime.py'], text=True, timeout=20))
+            (ARTIFACTS/'audio-runtime.json').write_text(json.dumps(audio_checks,indent=2))
             if CONTROL == 'native':
                 boundary_checks = json.loads(subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/native_runtime.py'], text=True))
                 (ARTIFACTS/'native-runtime.json').write_text(json.dumps(boundary_checks,indent=2))
             subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
             fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
-            api('/api/action/cast', {'page_id': page['id'], 'tv_id': tv['id']})
-            fixture.wait_for(lambda: api('/api/state')['runtime']['airplay'] == 'sending', 30, 'AirPlay readiness')
-            fixture.wait_for(lambda: max([int(v) for v in re.findall(r'video=(\d+)/', log.read_text())] or [0]) >= 30, 30, 'AirPlay packets')
+            ids = [tv['id'], tv2['id']]
+            api('/api/action/cast', {'page_id': page['id'], 'tv_ids': ids})
+            def both_sending():
+                current = api('/api/state')['runtime']['receivers']
+                return set(current) == set(ids) and all(item['state'] == 'sending' for item in current.values())
+            fixture.wait_for(both_sending, 40, 'two simultaneous AirPlay receivers')
+            fixture.wait_for(lambda: all(frames(i) >= 60 and packets(i, 'audio_rtp') >= 300 for i in range(2)), 40, 'video frames and audio RTP at both receivers')
+            assert all(value['audio'] == 'active' for value in api('/api/state')['runtime']['receivers'].values())
+            before_fps = [frames(i) for i in range(2)]
+            started = time.monotonic()
+            time.sleep(8)
+            elapsed = time.monotonic() - started
+            measured_fps = [round((frames(i)-before_fps[i])/elapsed, 2) for i in range(2)]
+            assert all(24 <= rate <= 36 for rate in measured_fps), measured_fps
             assert fixture.Fixture.metrics['videoWidth'] == 640
             second = api('/api/settings/pages', {'name':'Second page', 'url':f'http://127.0.0.1:{server.server_port}/second'})
-            before_packets = max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text()))
+            before_packets = [packets(i) for i in range(2)]
             api('/api/action/open', {'page_id':second['id']})
             fixture.wait_for(lambda: fixture.Fixture.metrics.get('path') == '/second', 10, 'native URL navigation')
-            assert api('/api/state')['runtime']['tv_id'] == tv['id'], 'Navigation changed the receiver'
-            fixture.wait_for(lambda: max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())) > before_packets + 15, 15, 'uninterrupted sender across navigation')
+            assert both_sending(), 'Navigation changed the receivers'
+            fixture.wait_for(lambda: all(packets(i) > before_packets[i]+30 for i in range(2)), 15, 'uninterrupted senders across navigation')
             for action, path in [('back','/'), ('forward','/second')]:
                 api('/api/action/browser', {'action':action})
                 fixture.wait_for(lambda: fixture.Fixture.metrics.get('path') == path, 10, action)
             api('/api/action/browser', {'action':'reload'})
             assert fixture.Fixture.metrics['webdriver'] == (CONTROL == 'diagnostic')
+            # A per-device stop must not interrupt the other receiver or browser.
+            api('/api/action/stop', {'tv_id':tv['id']})
+            assert set(api('/api/state')['runtime']['receivers']) == {tv2['id']}
+            remaining_packets = packets(1)
+            fixture.wait_for(lambda: packets(1) > remaining_packets+30, 10, 'second receiver survives first Stop')
+            # Reconnect one while the other stays up, then fail that process.
+            api('/api/action/cast', {'page_id':second['id'], 'tv_ids':ids})
+            fixture.wait_for(both_sending, 30, 'rejoin while other receiver sends')
+            fixture.stop(receivers[0])
+            fixture.wait_for(lambda: api('/api/state')['runtime']['receivers'][tv['id']]['state'] == 'error', 45, 'targeted receiver failure')
+            assert api('/api/state')['runtime']['receivers'][tv2['id']]['state'] == 'sending'
+            remaining_packets = packets(1)
+            fixture.wait_for(lambda: packets(1) > remaining_packets+30, 10, 'second receiver survives first failure')
             api('/api/action/stop', {})
             assert api('/api/state')['runtime']['browser'] == 'ready', 'Stop closed browser'
             api('/api/action/close', {})
@@ -134,13 +168,18 @@ def main():
             assert api('/api/diagnostics', {})['display'] == diagnostics['display'], 'Display defaults changed on reopen'
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
-            assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake']), processes
+            assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake', 'pulseaudio']), processes
             result = {'control_mode':CONTROL, 'webdriver':fixture.Fixture.metrics['webdriver'],
                       'native_navigation_and_history':True, 'sender_survives_navigation':True,
                       'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
                       'masked_clipboard_paste_preserves_unicode_and_punctuation': True, 'paste_dialog_cleared': True,
                       'browser_version': subprocess.check_output(['docker', 'exec', 'doubletake-integration', 'google-chrome', '--version'], text=True).strip(),
-                      'airplay_video_packets': max(int(v) for v in re.findall(r'video=(\d+)/', log.read_text())), 'profile_and_cookie_retained': True,
+                      'airplay_video_packets': [packets(i) for i in range(2)],
+                      'airplay_audio_packets': [packets(i,'audio') for i in range(2)],
+                      'airplay_audio_rtp_packets': [packets(i,'audio_rtp') for i in range(2)],
+                      'received_video_fps':measured_fps,
+                      'two_receivers_simultaneous':True, 'targeted_stop_and_failure_isolated':True,
+                      'private_browser_audio':audio_checks, 'profile_and_cookie_retained': True,
                       'stop_preserves_browser': True, 'close_cleans_processes': True, 'real_apple_tv_tested': False}
             (ARTIFACTS / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result, indent=2))
@@ -162,7 +201,8 @@ def main():
             subprocess.run(['docker', 'stop', '-t', '60', 'doubletake-integration'], check=False)
             subprocess.run(['docker', 'rm', 'doubletake-integration'], check=False)
             subprocess.run(['sudo', 'chown', '-R', f'{os.getuid()}:{os.getgid()}', str(state)], check=True)
-            fixture.stop(receiver)
+            for receiver in receivers:
+                fixture.stop(receiver)
             server.shutdown()
 
 

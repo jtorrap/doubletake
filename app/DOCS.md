@@ -13,7 +13,9 @@ It obtains the MQTT broker connection from Supervisor automatically.
 
 Add a named page such as **Home Assistant** with its normal dashboard URL.
 Add a TV with its IP/hostname and AirPlay port, or choose **Find Apple TVs**.
-The first version runs one browser and sends to one TV at a time.
+One browser can send the same page and its audio to several TVs at once.
+Every connected TV sees the same browser interactions. Independent pages per TV
+and synchronized multiroom audio are not supported.
 
 Choose a page and **Open browser** to sign in. Click inside the preview to type;
 mouse, keyboard, and scrolling operate the remote browser. Use Back, Forward,
@@ -27,17 +29,28 @@ submitting the form. The dialog clears when sent or closed. Text is sent through
 authenticated Ingress and the private browser connection; it is not written to
 app settings, logs, MQTT, or the remote clipboard.
 
-Choose a TV and **Show on TV** to send the same browser window. If the receiver
-requests a pairing code or configured AirPlay password, enter it in the app.
-Codes are passed privately and are not saved in settings or logs. Receiver
-pairing credentials are stored separately for each saved TV.
+Check the TVs you want and choose **Show on TVs**. This applies exactly the
+checked set: unchecked TVs disconnect. Changing checkboxes alone has no effect
+on playback, and refreshing connection status preserves your pending selection.
+When the app first opens, the checkboxes reflect the current connections.
+
+Each TV has its own video and audio status, error, and **Stop** button. Audio
+problems are shown even when video keeps sending. **Audio active** means the
+capture path has started; confirm audible playback on the TV. If a receiver
+requests pairing, choose **Enter code** beside that TV; the dialog names the
+receiver. Enter its displayed code or configured AirPlay password. Codes are
+passed privately and are not saved in settings or logs. The input clears on
+submission or closing. Pairing credentials are stored separately for each TV.
 
 Show preserves your current interaction when the same saved page is selected.
-Open browser and Home Assistant launch buttons navigate to the saved URL.
+**Open browser** navigates to the saved URL. A Home Assistant launch button adds
+its TV to the connected set and selects its saved page. Choosing a different
+page changes the shared browser on every connected TV.
 
-Switching TVs stops the prior sender and connects the selected receiver.
-**Stop** keeps the browser open. **Close browser** stops both. A receiver error
-requires another explicit Show action; the app does not repeatedly reclaim a TV.
+**Stop all** disconnects every TV and keeps the browser open. **Close browser**
+also closes the browser. Stopping one TV leaves the others connected. A receiver
+error requires another explicit Show action; the app does not repeatedly reclaim
+a TV or stop the other receivers when one connection fails.
 
 Use the page's normal sign-in flow and trusted certificate configuration. The
 app does not bypass certificate errors or disable Chromium's sandbox.
@@ -59,13 +72,14 @@ that a website accepts sign-in. Complete sign-in yourself through the preview.
 Each saved TV appears through MQTT discovery as **TV name Browser**. It has:
 
 - **Show page name** buttons for each saved page.
-- **Stop**, scoped to that TV. Stopping an inactive TV leaves the active TV alone.
+- **Stop**, scoped to that TV. Other TVs keep playing.
 - **Status** and **Page** sensors.
 
 Select the matching button in an automation's **Perform action → Button: Press**
 action. This binds a saved URL and a saved TV without placing URLs or credentials
 in an automation. For example, pressing Basement Browser's **Show Home Assistant**
-button selects that page and receiver. The actual entity ID is assigned by HA;
+button adds that receiver and selects the shared page. Launching the same page
+on another TV retains the browser's current interaction. The actual entity ID is assigned by HA;
 renaming a page or TV preserves its stable discovery identity.
 
 The sending status indicates a negotiated sender connection. It does not prove
@@ -79,8 +93,10 @@ without starting playback.
 ## Quality and resource usage
 
 The HA app Configuration tab offers 1080p at 15 or 30 fps, or 720p at 30 fps.
-Changing this option requires an app restart. Start with the default 1080p/15
-and measure CPU load while displaying your actual cameras and charts.
+Changing this option requires an app restart. The default is 1080p at 30 fps.
+The preview footer shows the configured output size and frame-rate target;
+actual playback depends on rendering, encoding, and the network. Measure CPU
+load while displaying your actual cameras and charts, especially with several TVs.
 
 The browser always reports a dark color preference and defaults to 120% page
 zoom. Websites with automatic dark themes use that preference; a website's
@@ -104,9 +120,14 @@ decoder properties in diagnostic mode, and container-local DRM activity. If acti
 cannot be observed, the check reports that it is unconfirmed. The check does not
 return page URLs, login fields, cookies, or raw browser logs.
 
-The initial implementation sends video only. It uses software H.264 encoding,
-an amd64 Google Chrome build with video codecs, Xvfb, and the existing doubletake
-AirPlay implementation. Host networking supports receiver discovery and the
+Browser audio is enabled by default and plays on the selected TVs. The interactive
+preview is silent. Use normal page playback and mute controls to choose what is
+heard; the app's **audio** Configuration option switches TV audio off and requires
+an app restart. Each receiver has its own AirPlay connection, so audio timing may
+differ between TVs.
+
+The app uses software H.264 encoding, an amd64 Google Chrome build with video
+codecs, Xvfb, and the existing doubletake AirPlay implementation. Host networking supports receiver discovery and the
 negotiated AirPlay ports. Ingress accepts only Supervisor's gateway; VNC is
 password-protected and loopback-only. No debugging port is exposed.
 

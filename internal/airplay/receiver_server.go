@@ -96,16 +96,22 @@ type ReceiverStats struct {
 	EventConnections  uint64
 	VideoConnections  uint64
 	VideoPackets      uint64
+	VideoFrames       uint64
 	VideoBytes        uint64
 	VideoDecrypted    uint64
 	VideoCryptoErrors uint64
 	// VideoWidth and VideoHeight are the largest codec-header canvas observed.
-	VideoWidth    uint64
-	VideoHeight   uint64
-	AudioPackets  uint64
-	AudioBytes    uint64
-	TimingProbes  uint64
-	TimingReplies uint64
+	VideoWidth   uint64
+	VideoHeight  uint64
+	AudioPackets uint64
+	AudioBytes   uint64
+	// Separate payload traffic from clock/control packets when checking audio.
+	AudioRTPPackets  uint64
+	AudioRTPBytes    uint64
+	AudioRTCPPackets uint64
+	AudioRTCPBytes   uint64
+	TimingProbes     uint64
+	TimingReplies    uint64
 }
 
 type receiverAtomicStats struct {
@@ -1549,6 +1555,7 @@ func (s *ReceiverServer) Stats() ReceiverStats {
 	stats.EventConnections = media.EventConnections
 	stats.VideoConnections = media.VideoConnections
 	stats.VideoPackets = media.VideoPackets
+	stats.VideoFrames = media.VideoFrames
 	stats.VideoBytes = media.VideoBytes
 	stats.VideoDecrypted = media.VideoDecrypted
 	stats.VideoCryptoErrors = media.VideoCryptoErrors
@@ -1556,6 +1563,10 @@ func (s *ReceiverServer) Stats() ReceiverStats {
 	stats.VideoHeight = media.VideoHeight
 	stats.AudioPackets = media.AudioPackets
 	stats.AudioBytes = media.AudioBytes
+	stats.AudioRTPPackets = media.AudioRTPPackets
+	stats.AudioRTPBytes = media.AudioRTPBytes
+	stats.AudioRTCPPackets = media.AudioRTCPPackets
+	stats.AudioRTCPBytes = media.AudioRTCPBytes
 	stats.TimingProbes = media.TimingProbes
 	stats.TimingReplies = media.TimingReplies
 	return stats

@@ -131,9 +131,15 @@ func TestReceiverStatsSummary(t *testing.T) {
 		AudioBytes:       14,
 		TimingProbes:     15,
 		TimingReplies:    16,
+		VideoFrames:      18,
+		AudioRTPPackets:  19,
+		AudioRTPBytes:    20,
+		AudioRTCPPackets: 21,
+		AudioRTCPBytes:   22,
 	}
 	want := "connections=2 info=3 pairing=4/5 fairplay=17 setup=7 feedback=8 teardown=9 " +
-		"events=10 video=11/12B audio=13/14B timing=15/16 digest_challenges=6"
+		"events=10 video=11/12B audio=13/14B timing=15/16 digest_challenges=6 " +
+		"video_frames=18 audio_rtp=19/20B audio_rtcp=21/22B"
 	if got := receiverStatsSummary(stats); got != want {
 		t.Fatalf("receiverStatsSummary() =\n%q\nwant\n%q", got, want)
 	}

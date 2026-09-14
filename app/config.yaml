@@ -1,7 +1,7 @@
 name: Doubletake Browser
-version: "0.1.6"
+version: "0.1.7"
 slug: doubletake_browser
-description: Interactive browser views sent to a saved Apple TV, with Home Assistant launch buttons
+description: Interactive browser views with sound sent to one or more Apple TVs
 url: https://github.com/jtorrap/doubletake
 arch:
   - amd64
@@ -26,10 +26,12 @@ timeout: 60
 backup: cold
 stage: experimental
 options:
-  quality: 1080p_15
+  quality: 1080p_30
+  audio: true
   hardware_decoding: true
   browser_control: native
 schema:
   quality: list(1080p_15|1080p_30|720p_30)
+  audio: bool
   hardware_decoding: bool
   browser_control: list(native|diagnostic)

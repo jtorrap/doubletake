@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7
+
+- Default to 1080p at 30 fps, retaining the 15 fps and 720p options.
+- Send browser audio through a private audio sink with ALAC and AAC-ELD support.
+- Select several TVs to receive the same browser page and audio simultaneously.
+- Show each receiver's status, pairing prompt and Stop control independently.
+- Keep Home Assistant launch buttons additive and Stop scoped to their own TV.
+- Preserve the browser profile, native controls, GPU decoding, dark mode and zoom.
+
 ## 0.1.6
 
 - Use regular Chrome with native desktop controls by default, without a browser debugging channel.

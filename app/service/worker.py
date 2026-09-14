@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One isolated browser and one AirPlay sender, controlled over private pipes.
+"""One isolated browser with independently owned AirPlay senders.
 
 stdout is a bounded JSON event channel, not a log. Never forward browser output
 or raw AirPlay messages to it. This process has no MQTT/Supervisor credentials.
@@ -19,7 +19,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from model import browser_text
+from model import browser_text, identifier
+from audio import BrowserAudio
 from acceleration import gpu_info, va_capabilities, video_engine_counters
 from browser_preferences import prepare_profile
 from native_control import browser_command as native_browser_command
@@ -97,14 +98,15 @@ class Worker:
     def __init__(self, config):
         self.config = config
         self.engine = load_engine()
-        self.browser = self.display = self.vnc = self.sender = None
+        self.browser = self.display = self.vnc = None
+        self.senders = {}
+        self.audio = None
         self.bus = None
         self.command_fd = self.response_fd = None
         self.cdp = None
         self.environment = None
         self.window = None
         self.page_session = None
-        self.sender_buffer = ""
         self.stop_event = asyncio.Event()
         self.stage = "dependencies"
         self.media = {}
@@ -165,6 +167,9 @@ class Worker:
                 'display': {'width': self.engine_config['width'], 'height': self.engine_config['height'],
                             'fps': self.engine_config['fps'], **page.get('display', {})},
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
+                'audio_enabled': self.audio is not None,
+                'audio': self.audio.diagnostics() if self.audio else {'ready': False},
+                'receiver_count': len(self.senders),
                 'video_engine_observable': bool(common),
                 'video_engine_active': video_ns > 0,
                 'video_engine_busy_percent': round(video_ns / elapsed * 100, 2) if common else None,
@@ -196,6 +201,10 @@ class Worker:
             self.environment['DBUS_SESSION_BUS_ADDRESS'] = ready.decode().strip()
             self.environment['ACCESSIBILITY_ENABLED'] = '1'
             self.environment['AT_SPI_BUS_ADDRESS'] = await asyncio.to_thread(accessibility_address, self.environment)
+        if os.environ.get('DOUBLETAKE_AUDIO', 'true') == 'true':
+            self.stage = 'audio'
+            self.audio = BrowserAudio(runtime, self.environment)
+            self.environment = await asyncio.to_thread(self.audio.start)
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
@@ -257,35 +266,63 @@ class Worker:
             raise RuntimeError("preview_start_failed")
         emit("ready", port=port, password=password)
 
-    def stop_sender(self):
-        if self.sender:
-            loop = asyncio.get_running_loop()
-            loop.remove_reader(self.sender.stdout.fileno())
-            self.engine.stop(self.sender)
-            self.sender.stdout.close()
-            self.sender.stdin.close()
-            self.sender = None
-        self.sender_buffer = ""
-
-    def sender_output(self):
-        if not self.sender:
+    async def stop_sender(self, tv_id=None):
+        if tv_id is None:
+            await asyncio.gather(*(self.stop_sender(key) for key in list(self.senders)))
             return
+        entry = self.senders.pop(tv_id, None)
+        if not entry:
+            return
+        process = entry['process']
+        asyncio.get_running_loop().remove_reader(process.stdout.fileno())
         try:
-            chunk = os.read(self.sender.stdout.fileno(), 8192)
+            await asyncio.to_thread(self.engine.stop, process)
+        finally:
+            process.stdout.close()
+            process.stdin.close()
+            entry['buffer'] = ''
+
+    def sender_output(self, tv_id, entry):
+        # A queued callback from an old connection must never update its retry.
+        if self.senders.get(tv_id) is not entry:
+            return
+        process = entry['process']
+        try:
+            chunk = os.read(process.stdout.fileno(), 8192)
         except OSError:
             return
         if not chunk:
-            asyncio.get_running_loop().remove_reader(self.sender.stdout.fileno())
+            asyncio.get_running_loop().remove_reader(process.stdout.fileno())
             return
-        self.sender_buffer = (self.sender_buffer + chunk.decode("utf-8", errors="replace"))[-16384:]
-        # Prompts have no newline. Recognize only known states; raw messages
-        # can contain authentication material and must never reach the UI.
-        if "Enter " in self.sender_buffer:
-            emit("airplay", state="pairing")
-            self.sender_buffer = ""
-        elif "mirror session ready" in self.sender_buffer:
-            emit("airplay", state="sending")
-            self.sender_buffer = ""
+        lines = (entry['buffer'] + chunk.decode('utf-8', errors='replace'))[-16384:].split('\n')
+        entry['buffer'] = lines.pop()
+        for line in lines:
+            self.sender_line(tv_id, entry, line)
+        # Prompts have no newline. Retain other partial lines so a ready event
+        # cannot discard an audio status split across reads.
+        if 'Enter ' in entry['buffer']:
+            self.sender_line(tv_id, entry, entry['buffer'])
+            entry['buffer'] = ''
+
+    def sender_line(self, tv_id, entry, line):
+        # Only fixed status markers leave the sender's private output channel.
+        # URLs, credentials and raw errors never reach the UI or logs.
+        if 'Enter ' in line:
+            entry['state'] = 'pairing'
+            emit('airplay', tv_id=tv_id, state='pairing')
+        elif 'mirror session ready' in line:
+            entry['state'] = 'sending'
+            emit('airplay', tv_id=tv_id, state='sending')
+        audio = None
+        if 'warning: audio capture failed:' in line or 'audio streaming error:' in line:
+            audio = 'error'
+        elif 'audio disabled (receiver did not provide audio ports)' in line:
+            audio = 'unavailable'
+        elif 'audio capture started' in line and entry.get('audio') != 'error':
+            audio = 'active'
+        if audio and audio != entry.get('audio'):
+            entry['audio'] = audio
+            emit('audio', tv_id=tv_id, state=audio)
 
     async def native_command(self, action, **fields):
         process = await asyncio.create_subprocess_exec(sys.executable, '-B', str(Path(__file__).with_name('native_control.py')),
@@ -345,20 +382,29 @@ class Worker:
             # It neither uses a clipboard nor sends Enter or other key actions.
             await self.cdp.call("Input.insertText", {"text": browser_text(value["value"])}, self.page_session)
         elif action == "cast":
-            self.stop_sender()
             receiver = value["receiver"]
+            tv_id = identifier(receiver['id'])
+            await self.stop_sender(tv_id)
             config = {**self.engine_config, "target": receiver["host"], "port": receiver["port"], "state_dir": str(Path(self.config["receivers_dir"]) / receiver["id"]), "pair": False}
             Path(config["state_dir"]).mkdir(parents=True, exist_ok=True, mode=0o700)
-            self.sender = subprocess.Popen(self.engine.sender_command(config, self.window), env=self.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-            asyncio.get_running_loop().add_reader(self.sender.stdout.fileno(), self.sender_output)
+            command = self.engine.sender_command(config, self.window)
+            if self.audio:
+                command = [part for part in command if part != '-no-audio']
+            process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+            entry = {'process': process, 'buffer': '', 'state': 'starting',
+                     'audio': 'starting' if self.audio else 'disabled'}
+            self.senders[tv_id] = entry
+            asyncio.get_running_loop().add_reader(process.stdout.fileno(), self.sender_output, tv_id, entry)
         elif action == "pin":
             pin = value["value"]
-            if not self.sender or self.sender.poll() is not None or not isinstance(pin, str) or not 1 <= len(pin) <= 128 or any(ord(c) < 32 for c in pin):
+            entry = self.senders.get(value.get('tv_id'))
+            if not entry or entry['state'] != 'pairing' or entry['process'].poll() is not None or not isinstance(pin, str) or not 1 <= len(pin) <= 128 or any(ord(c) < 32 for c in pin):
                 raise RuntimeError("pairing_not_waiting")
-            self.sender.stdin.write(pin.encode() + b"\n")
-            self.sender.stdin.flush()
+            entry['process'].stdin.write(pin.encode() + b'\n')
+            entry['process'].stdin.flush()
+            entry['state'] = 'starting'
         elif action == "stop":
-            self.stop_sender()
+            await self.stop_sender(value.get('tv_id'))
         elif action == "close":
             self.stop_event.set()
         else:
@@ -366,13 +412,20 @@ class Worker:
 
     async def monitor(self):
         while not self.stop_event.is_set():
-            if any(process.poll() is not None for process in [self.browser, self.display, self.vnc]):
+            owned = [self.browser, self.display, self.vnc]
+            if self.audio:
+                owned.append(self.audio.process)
+            if any(process.poll() is not None for process in owned):
                 emit("fatal", code="browser_session_ended")
                 self.stop_event.set()
                 return
-            if self.sender and self.sender.poll() is not None:
-                self.stop_sender()
-                emit("airplay", state="error", code="receiver_session_ended")
+            for tv_id, entry in list(self.senders.items()):
+                if entry['process'].poll() is not None and self.senders.get(tv_id) is entry:
+                    await self.stop_sender(tv_id)
+                    # Stop/retry can run while process cleanup awaits. Ignore
+                    # the old exit if a replacement connection already exists.
+                    if tv_id not in self.senders:
+                        emit('airplay', tv_id=tv_id, state='error', code='receiver_session_ended')
             await asyncio.sleep(0.25)
 
     async def commands(self):
@@ -402,7 +455,7 @@ class Worker:
                 value.clear()
 
     async def close(self):
-        self.stop_sender()
+        await self.stop_sender()
         if self.native and self.browser and self.browser.poll() is None and self.window:
             with contextlib.suppress(Exception):
                 await self.native_command('close')
@@ -421,6 +474,8 @@ class Worker:
                 os.close(fd)
         self.engine.stop(self.display)
         self.engine.stop(self.bus)
+        if self.audio:
+            await asyncio.to_thread(self.audio.close)
 
 
 async def main():

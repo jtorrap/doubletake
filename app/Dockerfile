@@ -1,11 +1,15 @@
 FROM golang:1.25-bookworm AS engine
 WORKDIR /src
+RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm non-free' > /etc/apt/sources.list.d/fdk-aac.list \
+    && apt-get update && apt-get install -y --no-install-recommends libfdk-aac-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 # Supervisor builds only this app directory. Pin and verify the separately
 # versioned capture engine instead of depending on files outside that context.
 RUN curl -fsSL https://codeload.github.com/jtorrap/doubletake/tar.gz/eb893212c93244dfd47908b4c5025a4652a75b8e -o engine.tar.gz \
     && echo 'a974f137a820d84d745fd77390bf2f01d30359db20ac95ca61b00a92379ac251  engine.tar.gz' | sha256sum -c - \
     && tar -xzf engine.tar.gz --strip-components=1 \
-    && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /doubletake ./cmd/doubletake
+    && CGO_ENABLED=1 go test -tags fdk_aac ./internal/airplay -run '^TestFDKAACELDEncodesRawFrame$' \
+    && CGO_ENABLED=1 go build -tags fdk_aac -trimpath -ldflags='-s -w' -o /doubletake ./cmd/doubletake
 
 FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 LANG=C.UTF-8
@@ -16,13 +20,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
        google-chrome-stable python3 python3-aiohttp python3-paho-mqtt python3-zeroconf \
        xvfb xauth xdotool x11vnc novnc fonts-dejavu-core fonts-liberation \
        dbus-x11 at-spi2-core python3-pyatspi python3-xlib \
+       pulseaudio pulseaudio-utils \
        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 1000 --shell /usr/sbin/nologin browser
 RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm non-free' > /etc/apt/sources.list.d/intel-media.list \
     && apt-get update && apt-get install -y --no-install-recommends \
-       intel-media-va-driver-non-free libva-drm2 vainfo libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+       intel-media-va-driver-non-free libva-drm2 vainfo libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers libfdk-aac2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=engine /doubletake /usr/local/bin/doubletake
 COPY --from=engine /src/scripts/doubletake-browser /opt/doubletake/launcher.py
@@ -30,7 +35,7 @@ COPY service/ /opt/browser-app/
 RUN chmod 755 /opt/browser-app/acceleration.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.6" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.7" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

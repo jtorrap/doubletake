@@ -2,8 +2,16 @@ import RFB from '../novnc/core/rfb.js';
 
 const $ = id => document.getElementById(id);
 let state = null, csrf = '', busy = false, rfb = null, connecting = false;
-let editing = null, removing = null;
+let editing = null, removing = null, pairingTV = null;
+let selectedTVs = new Set(), selectionDirty = false, pageSelectionDirty = false;
+let tvChoicesSignature = '', receiversSignature = '';
 const labels = {closed:'Browser closed', starting:'Starting browser', ready:'Browser ready', error:'Needs attention'};
+const receiverLabels = {starting:'Connecting', pairing:'Pairing required', sending:'Sending', error:'Needs attention'};
+const audioLabels = {starting:'Audio starting',active:'Audio active',unavailable:'Audio unavailable',error:'Audio failed',disabled:'Audio off'};
+
+function receivers() { return state?.runtime.receivers || {}; }
+function tvName(id) { return state?.tvs.find(item => item.id === id)?.name || 'TV'; }
+function sameSelection(ids) { return ids.length === selectedTVs.size && ids.every(id => selectedTVs.has(id)); }
 
 async function api(path, body, method='POST') {
   const response = await fetch(new URL(path, document.baseURI), {method, credentials:'same-origin', headers:{'Content-Type':'application/json','X-Doubletake-CSRF':csrf}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
@@ -28,14 +36,87 @@ function options(select, values, empty) {
 }
 function controls() {
   const ready = state?.runtime.browser === 'ready';
+  $('pageChoice').disabled = busy;
   $('openBrowser').disabled = busy || !$('pageChoice').value;
-  $('cast').disabled = busy || !$('pageChoice').value || !$('tvChoice').value;
-  $('stop').disabled = busy || !state?.runtime.tv_id;
+  $('cast').disabled = busy || !$('pageChoice').value || !selectedTVs.size;
+  $('stop').disabled = busy || !Object.keys(receivers()).length;
   $('closeBrowser').disabled = busy || !ready;
   $('fullscreen').disabled = !ready;
   $('pasteText').disabled = busy || !ready || !rfb;
   $('checkVideo').disabled = busy || !ready;
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
+  document.querySelectorAll('[data-receiver-action], #tvChoices input').forEach(control => control.disabled = busy);
+  const changed = !sameSelection(Object.keys(receivers()));
+  const shared = state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
+  $('selectionHint').textContent = changed && Object.keys(receivers()).length ?
+    `Selection changed. Show on TVs applies this set and disconnects unchecked TVs. ${shared}` :
+    `${shared} Apply your selection with Show on TVs.`;
+}
+function renderTVChoices() {
+  const signature = JSON.stringify(state.tvs.map(({id,name}) => [id,name]));
+  if (signature !== tvChoicesSignature) {
+    tvChoicesSignature = signature;
+    $('tvChoices').replaceChildren();
+    if (!state.tvs.length) {
+      const empty = document.createElement('span'); empty.className = 'empty-choice'; empty.textContent = 'Add a TV below';
+      $('tvChoices').append(empty);
+    }
+    for (const tv of state.tvs) {
+      const label = document.createElement('label'); label.className = 'tv-choice';
+      const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.value = tv.id;
+      const name = document.createElement('span'); name.textContent = tv.name;
+      checkbox.addEventListener('change', () => {
+        selectionDirty = true;
+        if (checkbox.checked) selectedTVs.add(tv.id); else selectedTVs.delete(tv.id);
+        controls();
+      });
+      label.append(checkbox,name); $('tvChoices').append(label);
+    }
+  }
+  $('tvChoices').querySelectorAll('input').forEach(checkbox => { checkbox.checked = selectedTVs.has(checkbox.value); });
+}
+function startPairing(id) {
+  pairingTV = id; $('pairTarget').textContent = `Pair ${tvName(id)}`;
+  $('pairValue').value = ''; $('pairError').textContent = '';
+  $('pairDialog').showModal(); $('pairValue').focus();
+}
+function clearPairing() { $('pairValue').value = ''; $('pairError').textContent = ''; pairingTV = null; }
+function renderReceivers() {
+  const entries = Object.entries(receivers());
+  $('receiverSection').hidden = !entries.length;
+  const signature = JSON.stringify(entries.map(([id,receiver]) => [id,tvName(id),receiver.state,receiver.error,receiver.audio]));
+  if (signature !== receiversSignature) {
+    receiversSignature = signature;
+    $('receivers').replaceChildren();
+    for (const [id,receiver] of entries) {
+      const row = document.createElement('div'); row.className = 'receiver card';
+      const info = document.createElement('div'); info.className = 'receiver-info';
+      const name = document.createElement('strong'); name.textContent = tvName(id);
+      const status = document.createElement('span'); status.className = `badge ${receiver.state === 'sending' ? 'good' : receiver.state === 'error' ? 'bad' : 'wait'}`;
+      status.textContent = receiverLabels[receiver.state] || receiver.state;
+      const title = document.createElement('div'); title.className = 'receiver-title'; title.append(name,status);
+      if (receiver.audio && audioLabels[receiver.audio]) {
+        const audio = document.createElement('span');
+        audio.className = `badge ${receiver.audio === 'active' ? 'good' : ['unavailable','error'].includes(receiver.audio) ? 'bad' : receiver.audio === 'starting' ? 'wait' : ''}`;
+        audio.textContent = audioLabels[receiver.audio];
+        if (receiver.audio === 'active') audio.title = 'Audio capture is active. Confirm sound on the TV.';
+        title.append(audio);
+      }
+      info.append(title);
+      if (receiver.error) { const detail = document.createElement('p'); detail.className = 'receiver-error'; detail.textContent = receiver.error; info.append(detail); }
+      const actions = document.createElement('div'); actions.className = 'actions';
+      if (receiver.state === 'pairing') {
+        const pair = document.createElement('button'); pair.textContent = 'Enter code'; pair.className = 'primary';
+        pair.dataset.receiverAction = 'pair'; pair.setAttribute('aria-label',`Enter code for ${tvName(id)}`);
+        pair.onclick = () => startPairing(id); actions.append(pair);
+      }
+      const stop = document.createElement('button'); stop.textContent = 'Stop'; stop.className = 'quiet'; stop.dataset.receiverAction = 'stop';
+      stop.setAttribute('aria-label',`Stop ${tvName(id)}`);
+      stop.onclick = () => run(async () => { await api('api/action/stop',{tv_id:id}); selectedTVs.delete(id); });
+      actions.append(stop); row.append(info,actions); $('receivers').append(row);
+    }
+  }
+  if (pairingTV && receivers()[pairingTV]?.state !== 'pairing') $('pairDialog').close();
 }
 function renderItems(kind) {
   const list = $(kind); list.replaceChildren();
@@ -55,16 +136,25 @@ function renderItems(kind) {
 }
 async function refresh() {
   state = await api('api/state', undefined, 'GET'); csrf = state.csrf;
-  options($('pageChoice'),state.pages,'Add a page below'); options($('tvChoice'),state.tvs,'Add a TV below');
+  options($('pageChoice'),state.pages,'Add a page below');
+  if (!pageSelectionDirty && state.pages.some(item => item.id === state.runtime.page_id)) $('pageChoice').value = state.runtime.page_id;
+  selectedTVs = new Set([...selectedTVs].filter(id => state.tvs.some(tv => tv.id === id)));
+  if (!selectionDirty) selectedTVs = new Set(Object.keys(receivers()).filter(id => state.tvs.some(tv => tv.id === id)));
+  renderTVChoices(); renderReceivers();
   renderItems('pages'); renderItems('tvs');
   $('version').textContent = `Doubletake Browser ${state.version} · ${state.runtime.control_mode==='native'?'Standard browser':'Diagnostic browser'}`;
+  const display = state.runtime.display;
+  $('streamFormat').textContent = display ? `${display.width} × ${display.height} · ${display.fps} fps target` : '';
+  $('audioPreviewNote').textContent = state.runtime.audio_enabled === false ?
+    'TV audio is off in app Configuration. Preview is silent.' : 'Browser audio plays on the TVs. Preview is silent.';
   $('mqttState').textContent = state.mqtt_connected?'Home Assistant connected':'Home Assistant controls reconnecting';
   $('mqttState').className = `badge ${state.mqtt_connected?'good':'wait'}`;
-  const current=state.runtime, tv=state.tvs.find(item=>item.id===current.tv_id), page=state.pages.find(item=>item.id===current.page_id);
-  $('sessionState').textContent=current.airplay==='sending'?'Sending to '+(tv?.name||'TV'):current.airplay==='pairing'?'TV pairing required':current.airplay==='starting'?'Connecting to TV':labels[current.browser];
-  $('sessionState').className=`badge ${current.airplay==='sending'?'good':current.airplay==='pairing'?'wait':''}`;
-  $('sessionDetail').textContent=current.error || (page?`${page.name}${tv?' → '+tv.name:''}`:'Open a page to sign in, click around, or start a TV view.');
-  $('pairForm').hidden=current.airplay!=='pairing';
+  const current=state.runtime, page=state.pages.find(item=>item.id===current.page_id), active=Object.entries(receivers());
+  const sending=active.filter(([,receiver])=>receiver.state==='sending').length;
+  const attention=active.some(([,receiver])=>['pairing','error'].includes(receiver.state)||['unavailable','error'].includes(receiver.audio));
+  $('sessionState').textContent=sending?`Sending to ${sending} ${sending===1?'TV':'TVs'}`:attention?'TVs need attention':active.length?'Connecting to TVs':labels[current.browser];
+  $('sessionState').className=`badge ${attention?'wait':sending?'good':''}`;
+  $('sessionDetail').textContent=current.error || (page?`${page.name}${active.length?' → '+active.map(([id])=>tvName(id)).join(', '):''}`:'Open a page to sign in, click around, or start a TV view.');
   $('previewLabel').textContent=page?.name||'Browser preview';
   $('previewEmpty').hidden=current.browser==='ready';
   if (current.browser==='ready' && !rfb && !connecting) connectPreview();
@@ -103,16 +193,19 @@ $('removeDialog').addEventListener('close',()=>{if($('removeDialog').returnValue
 $('editForm').addEventListener('submit',async event=>{
   event.preventDefault(); const {kind,id}=editing;
   const item={name:$('itemName').value,...(kind==='pages'?{url:$('itemURL').value}:{host:$('itemHost').value,port:Number($('itemPort').value)})};
-  try{const saved=await api(`api/settings/${kind}${id?'/'+id:''}`,item,id?'PUT':'POST'); $('editor').close();await refresh();$(kind==='pages'?'pageChoice':'tvChoice').value=saved.id;controls();}
+  try{const saved=await api(`api/settings/${kind}${id?'/'+id:''}`,item,id?'PUT':'POST'); $('editor').close();await refresh();
+    if(kind==='pages'){$('pageChoice').value=saved.id;pageSelectionDirty=true;}
+    else if(!id){selectedTVs.add(saved.id);selectionDirty=true;renderTVChoices();}
+    controls();}
   catch(error){$('editorError').textContent=error.message;}
 });
 $('cancelEdit').onclick=()=>$('editor').close();
 $('addPage').onclick=()=>edit('pages'); $('addTV').onclick=()=>edit('tvs');
-$('pageChoice').onchange=controls; $('tvChoice').onchange=controls;
-$('openBrowser').onclick=()=>run(()=>api('api/action/open',{page_id:$('pageChoice').value}));
-$('cast').onclick=()=>run(()=>api('api/action/cast',{page_id:$('pageChoice').value,tv_id:$('tvChoice').value}));
-$('stop').onclick=()=>run(()=>api('api/action/stop',{}));
-$('closeBrowser').onclick=()=>run(()=>api('api/action/close',{}));
+$('pageChoice').onchange=()=>{pageSelectionDirty=true;controls();};
+$('openBrowser').onclick=()=>run(async()=>{await api('api/action/open',{page_id:$('pageChoice').value});pageSelectionDirty=false;});
+$('cast').onclick=()=>run(async()=>{await api('api/action/cast',{page_id:$('pageChoice').value,tv_ids:[...selectedTVs]});selectionDirty=false;pageSelectionDirty=false;});
+$('stop').onclick=()=>run(async()=>{await api('api/action/stop',{});selectedTVs.clear();selectionDirty=false;});
+$('closeBrowser').onclick=()=>run(async()=>{await api('api/action/close',{});selectedTVs.clear();selectionDirty=false;});
 document.querySelectorAll('[data-browser]').forEach(button=>button.onclick=()=>run(()=>api('api/action/browser',{action:button.dataset.browser})));
 $('fullscreen').onclick=()=>$('viewport').requestFullscreen();
 $('pasteText').onclick=()=>{
@@ -140,7 +233,16 @@ $('pasteForm').addEventListener('submit',async event=>{
     value=''; $('sendPaste').disabled=false;
   }
 });
-$('pairForm').addEventListener('submit',event=>{event.preventDefault();const value=$('pairValue').value;$('pairValue').value='';run(()=>api('api/action/pin',{value}));});
+$('cancelPair').onclick=()=>$('pairDialog').close();
+$('pairDialog').addEventListener('cancel',clearPairing);
+$('pairDialog').addEventListener('close',clearPairing);
+$('pairForm').addEventListener('submit',async event=>{
+  event.preventDefault(); const tv_id=pairingTV; let value=$('pairValue').value;
+  $('pairValue').value=''; $('sendPair').disabled=true;
+  try { await api('api/action/pin',{tv_id,value}); $('pairDialog').close(); await refresh(); }
+  catch { $('pairError').textContent='The code could not be sent. Check this TV and try again.'; }
+  finally { value=''; $('sendPair').disabled=false; }
+});
 $('discover').onclick=async()=>{
   $('discover').disabled=true; $('discovered').textContent='Looking for Apple TVs…'; $('discovery').showModal();
   try{const result=await api('api/discover',{});$('discovered').replaceChildren();if(!result.tvs.length)$('discovered').textContent='No Apple TVs found. You can still add a TV by address.';

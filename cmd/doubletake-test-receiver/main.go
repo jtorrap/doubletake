@@ -161,7 +161,7 @@ func reportReceiverStats(ctx context.Context, server *airplay.ReceiverServer, in
 
 func receiverStatsSummary(stats airplay.ReceiverStats) string {
 	return fmt.Sprintf(
-		"connections=%d info=%d pairing=%d/%d fairplay=%d setup=%d feedback=%d teardown=%d events=%d video=%d/%dB audio=%d/%dB timing=%d/%d digest_challenges=%d",
+		"connections=%d info=%d pairing=%d/%d fairplay=%d setup=%d feedback=%d teardown=%d events=%d video=%d/%dB audio=%d/%dB timing=%d/%d digest_challenges=%d video_frames=%d audio_rtp=%d/%dB audio_rtcp=%d/%dB",
 		stats.Connections,
 		stats.InfoRequests,
 		stats.PairSetup,
@@ -178,5 +178,10 @@ func receiverStatsSummary(stats airplay.ReceiverStats) string {
 		stats.TimingProbes,
 		stats.TimingReplies,
 		stats.DigestChallenges,
+		stats.VideoFrames,
+		stats.AudioRTPPackets,
+		stats.AudioRTPBytes,
+		stats.AudioRTCPPackets,
+		stats.AudioRTCPBytes,
 	)
 }

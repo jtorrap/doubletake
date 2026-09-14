@@ -33,7 +33,7 @@ def main():
         "1080p_30": {"width": 1920, "height": 1080, "fps": 30, "bitrate": 8000, "hwaccel": "none"},
         "720p_30": {"width": 1280, "height": 720, "fps": 30, "bitrate": 4500, "hwaccel": "none"},
     }
-    quality = qualities[options.get("quality", "1080p_15")]
+    quality = qualities[options.get("quality", "1080p_30")]
     for path in (Path("/data/doubletake"), Path("/run/doubletake")):
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.chmod(0o700)
@@ -48,6 +48,7 @@ def main():
     keep = {key: os.environ[key] for key in ("PATH", "LANG", "TZ") if key in os.environ}
     keep.update(HOME="/home/browser", DOUBLETAKE_BROWSER="/opt/browser-app/acceleration.py",
                 DOUBLETAKE_BROWSER_CONTROL=options.get('browser_control', 'native'),
+                DOUBLETAKE_AUDIO="true" if options.get("audio", True) else "false",
                 DOUBLETAKE_HARDWARE_DECODING="true" if options.get("hardware_decoding", True) else "false")
     os.environ.clear()
     os.environ.update(keep)

@@ -1,0 +1,125 @@
+// Synthetic backend only: no user profiles, credentials, or network receivers.
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || '/tmp/app-playwright/node_modules/playwright');
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const staticDir = path.join(__dirname, '../service/static');
+const outputDir = process.argv[2];
+
+(async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROME_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : '/usr/bin/google-chrome'),
+    // This disposable UI-test browser has no real app data.
+    args: process.platform === 'linux' ? ['--no-sandbox'] : [],
+  });
+  const page = await browser.newPage({viewport: {width:745, height:1000}, colorScheme:'dark'});
+  const errors = [], actions = [];
+  let stateReads = 0;
+  const fixture = {
+    version:'test', csrf:'synthetic-csrf', mqtt_connected:true,
+    pages:[{id:'basement',name:'Basement dashboard',url:'https://example.test/basement'}, {id:'youtube',name:'Youtube',url:'https://example.test/youtube'}],
+    tvs:[{id:'upstairs',name:'Upstairs',host:'192.0.2.1',port:7000}, {id:'cart',name:'Cart',host:'192.0.2.2',port:7000}],
+    runtime:{browser:'ready',page_id:'youtube',control_mode:'native',error:null,audio_enabled:true,
+      display:{width:1920,height:1080,fps:30},receivers:{cart:{state:'sending',error:null,audio:'active'}}},
+  };
+  page.on('pageerror', error => errors.push(error.message));
+  await page.route('http://doubletake.test/**', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/state') {
+      stateReads++;
+      return route.fulfill({json:fixture});
+    }
+    if (url.pathname === '/api/preview') return route.fulfill({json:{password:'synthetic-preview'}});
+    if (url.pathname.startsWith('/api/action/')) {
+      const body = route.request().postDataJSON(), action = url.pathname.split('/').pop();
+      actions.push({action,body});
+      if (action === 'cast') {
+        fixture.runtime.page_id = body.page_id;
+        fixture.runtime.receivers = Object.fromEntries(body.tv_ids.map(id => [id,fixture.runtime.receivers[id] || {state:'pairing',error:null,audio:'starting'}]));
+      } else if (action === 'stop') {
+        if (body.tv_id) delete fixture.runtime.receivers[body.tv_id]; else fixture.runtime.receivers = {};
+      } else if (action === 'pin') fixture.runtime.receivers[body.tv_id] = {state:'sending',error:null,audio:'active'};
+      return route.fulfill({json:{ok:true}});
+    }
+    if (url.pathname === '/novnc/core/rfb.js') return route.fulfill({contentType:'text/javascript',body:
+      'export default class RFB {constructor(el){const canvas=document.createElement("canvas");canvas.width=1920;canvas.height=1080;el.append(canvas);} addEventListener(name,callback){if(name==="connect")setTimeout(callback,0);}disconnect(){}focus(){}}'});
+    const name = url.pathname === '/' ? 'index.html' : url.pathname.replace('/static/','');
+    if (['index.html','app.js','style.css'].includes(name)) return route.fulfill({path:path.join(staticDir,name)});
+    return route.fulfill({status:404,body:'Not found'});
+  });
+  async function afterPoll() {
+    const previous = stateReads;
+    const deadline = Date.now() + 6000;
+    while (stateReads <= previous && Date.now() < deadline) await page.waitForTimeout(100);
+    assert.ok(stateReads > previous, 'UI polling stopped');
+    await page.waitForTimeout(100);
+  }
+  async function noOverflow() {
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Page overflowed viewport');
+  }
+  try {
+    await page.goto('http://doubletake.test/');
+    await page.waitForFunction(() => document.querySelector('#previewState').textContent.startsWith('Connected'));
+    assert.equal(await page.locator('#pageChoice').inputValue(),'youtube');
+    assert.equal(await page.getByRole('checkbox',{name:'Cart',exact:true}).isChecked(),true);
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),false);
+    assert.match(await page.locator('#streamFormat').innerText(), /1920 × 1080 · 30 fps target/);
+    await page.getByRole('checkbox',{name:'Upstairs',exact:true}).check();
+    await page.locator('#pageChoice').selectOption('basement');
+    await afterPoll();
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),true, 'Poll lost selected TV');
+    assert.equal(await page.locator('#pageChoice').inputValue(),'basement','Poll lost selected page');
+    await page.getByRole('button',{name:'Show on TVs',exact:true}).click();
+    await page.getByRole('button',{name:'Enter code for Upstairs',exact:true}).waitFor();
+    assert.deepEqual(actions.at(-1),{action:'cast',body:{page_id:'basement',tv_ids:['cart','upstairs']}});
+    await noOverflow();
+    if (outputDir) {
+      fs.mkdirSync(outputDir,{recursive:true});
+      await page.screenshot({path:path.join(outputDir,'multi-tv-745.png'),fullPage:true});
+    }
+    await page.setViewportSize({width:390,height:844});
+    await noOverflow();
+    if (outputDir) await page.screenshot({path:path.join(outputDir,'multi-tv-390.png'),fullPage:true});
+    await page.getByRole('button',{name:'Enter code for Upstairs',exact:true}).click();
+    assert.equal(await page.locator('#pairTarget').innerText(),'Pair Upstairs');
+    assert.equal(await page.locator('#pairValue').getAttribute('type'),'password');
+    await page.locator('#pairValue').fill('1234');
+    await page.getByRole('button',{name:'Continue',exact:true}).click();
+    await page.waitForFunction(() => !document.querySelector('#pairDialog').open);
+    assert.deepEqual(actions.at(-1),{action:'pin',body:{tv_id:'upstairs',value:'1234'}});
+    assert.equal(await page.locator('#pairValue').inputValue(),'');
+    fixture.runtime.receivers.upstairs.audio = 'error';
+    await afterPoll();
+    assert.match(await page.locator('#receivers').innerText(),/Audio failed/);
+    assert.equal(fixture.runtime.receivers.upstairs.state,'sending');
+    await page.getByRole('button',{name:'Stop Upstairs',exact:true}).click();
+    await page.getByRole('button',{name:'Stop Upstairs',exact:true}).waitFor({state:'detached'});
+    assert.deepEqual(actions.at(-1),{action:'stop',body:{tv_id:'upstairs'}});
+    assert.equal(fixture.runtime.receivers.cart.state,'sending');
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),false);
+    // A second client's new receiver follows live state until this user edits.
+    fixture.runtime.receivers.upstairs = {state:'error',error:'Could not connect to this TV.'};
+    await afterPoll();
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),true);
+    assert.match(await page.locator('#receivers').innerText(),/Could not connect to this TV/);
+    await page.getByRole('checkbox',{name:'Cart',exact:true}).uncheck();
+    await afterPoll();
+    assert.equal(await page.getByRole('checkbox',{name:'Cart',exact:true}).isChecked(),false);
+    // Explicit Stop all applies immediately even with an unsubmitted selection.
+    await page.getByRole('button',{name:'Stop all',exact:true}).click();
+    await page.locator('#receiverSection').waitFor({state:'hidden'});
+    assert.deepEqual(actions.at(-1),{action:'stop',body:{}});
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),false);
+    fixture.runtime.audio_enabled = false;
+    await afterPoll();
+    assert.match(await page.locator('#audioPreviewNote').innerText(),/TV audio is off/);
+    // Password paste remains masked and clears on cancel after the UI redesign.
+    await page.getByRole('button',{name:'Paste',exact:true}).click();
+    await page.locator('#pasteValue').fill('synthetic cancelled text');
+    assert.equal(await page.locator('#pasteValue').getAttribute('type'),'password');
+    await page.getByRole('button',{name:'Cancel paste',exact:true}).click();
+    assert.equal(await page.locator('#pasteValue').inputValue(),'');
+    assert.deepEqual(errors,[]);
+    console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true}));
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exit(1); });

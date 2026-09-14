@@ -79,8 +79,9 @@ class MQTTBridge:
         runtime = self.state()
         pages = {page["id"]: page["name"] for page in self.store.data["pages"]}
         for tv in self.store.data["tvs"]:
-            active = runtime.get("tv_id") == tv["id"]
-            state = runtime.get("airplay", "idle") if active else "idle"
+            receiver = runtime.get('receivers', {}).get(tv['id'])
+            active = receiver is not None
+            state = receiver['state'] if active else 'idle'
             page = pages.get(runtime.get("page_id"), "None") if active else "None"
             self.client.publish(f"{self.base}/{tv['id']}/state", json.dumps({"state": state, "page": page}), qos=1, retain=True)
 
