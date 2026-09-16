@@ -36,6 +36,7 @@ jobs:
           import os
           from pathlib import Path
           import select
+          import secrets
           import signal
           import socket
           import stat
@@ -57,10 +58,20 @@ jobs:
               password = runtime / 'xvnc.pass'
               rfb = runtime / 'xvnc-rfb'
               private_password = _private_vnc_password(password)
+              authority = runtime / 'Xauthority'
+              authority.touch(mode=0o600)
+              cookie = secrets.token_hex(16)
+              def authorize(display):
+                  subprocess.run(['xauth', '-f', str(authority), 'source', '-'],
+                                 input=f'add {display} MIT-MAGIC-COOKIE-1 {cookie}\n',
+                                 text=True, check=True, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=5)
+              authorize(':0')
               read_fd, write_fd = os.pipe()
               process = subprocess.Popen([
                   'Xvnc', '-displayfd', str(write_fd), '-geometry', '1920x1080',
-                  '-depth', '24', '-nolisten', 'tcp', '-noreset', '-rfbport', '-1',
+                  '-depth', '24', '-nolisten', 'tcp', '-auth', str(authority),
+                  '-noreset', '-rfbport', '-1',
                   '-rfbunixpath', str(rfb), '-rfbunixmode', '0600',
                   '-SecurityTypes', 'VncAuth', '-PasswordFile', str(password),
                   '-rendernode', '', '-desktop', 'CI display probe'],
@@ -86,6 +97,8 @@ jobs:
                           connection.sendall(version)
                           assert stream.read(2) == b'\x01\x02', 'VncAuth must be the only security type'
                       os.environ['DISPLAY'] = ':' + number.decode('ascii')
+                      os.environ['XAUTHORITY'] = str(authority)
+                      authorize(os.environ['DISPLAY'])
                       before = measure(3)
                       assert before['hz'] < 2, before
                       with connect_keeper(rfb, private_password, expected_pid=process.pid):
