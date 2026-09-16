@@ -139,15 +139,15 @@ def main():
             expected_display = {'width':1920, 'height':1080, 'fps':30}
             if CONTROL == 'diagnostic':
                 expected_display.update({
-                                              'css_width':1600, 'css_height':900,
-                                              'page_zoom_percent':120, 'prefers_dark':True})
+                                              'css_width':1920, 'css_height':1080,
+                                              'page_zoom_percent':100, 'prefers_dark':True})
                 assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
             assert diagnostics['display'] == expected_display, diagnostics['display']
             assert diagnostics['display_server']['backend'] == 'xvnc', diagnostics['display_server']
             assert diagnostics['display_server']['dri3'] is False, diagnostics['display_server']
             metrics = fixture.Fixture.metrics
             assert metrics['webdriver'] == (CONTROL == 'diagnostic'), metrics
-            assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1600,900,120,True)
+            assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1920,1080,100,True)
             assert not diagnostics['video_engine_active'], 'CI unexpectedly reports GPU activity'
             assert diagnostics['audio_enabled'] and diagnostics['audio']['ready'], diagnostics
             audio_checks = json.loads(subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/audio_runtime.py'], text=True, timeout=20))
@@ -234,6 +234,7 @@ def main():
             fixture.wait_for(lambda: fixture.Fixture.metrics.get('updates', 0) > 10, 20, 'reopened browser')
             assert fixture.Fixture.metrics['profileToken'] == token
             assert fixture.Fixture.metrics['hadProfile'] and fixture.Fixture.metrics['hadCookie']
+            assert tuple(fixture.Fixture.metrics[key] for key in ('css_width','css_height','zoom','dark')) == (1920,1080,100,True)
             assert api('/api/diagnostics', {})['display'] == diagnostics['display'], 'Display defaults changed on reopen'
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)

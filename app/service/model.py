@@ -8,7 +8,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 ID = re.compile(r"^[a-f0-9]{16}$")
 
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11
+
+- Set the default browser zoom to 100%, retaining per-site overrides and dark mode.
+
 ## 0.1.10
 
 - Report audio capture age, sent packets and stale-frame drops in Check video.

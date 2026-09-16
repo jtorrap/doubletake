@@ -18,7 +18,7 @@ def prepare_profile(profile_directory):
     if not isinstance(zoom, dict):
         raise ValueError('Browser preferences are invalid')
     # Chrome stores logarithmic levels: factor = 1.2 ** level. The default
-    # storage partition has key "x" (empty relative path), so 1.0 means 120%.
+    # storage partition has key "x" (empty relative path), so 0.0 means 100%.
     # Preserve per-site zoom overrides and unrelated profile/authentication data.
-    zoom['x'] = 1.0
+    zoom['x'] = 0.0
     atomic_json(path, preferences)

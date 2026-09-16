@@ -118,11 +118,11 @@ Xvnc's TCP listener is disabled; its required unused Unix socket stays inside
 the private runtime with a separate random password. Check video reports the backend,
 DRI3 support and display renderer. Native sign-in mode remains unchanged.
 
-The browser always reports a dark color preference and defaults to 120% page
+The browser always reports a dark color preference and defaults to 100% page
 zoom. Websites with automatic dark themes use that preference; a website's
 explicit theme setting can still take precedence. Per-site zoom overrides are
 retained. At 1080p, the output remains 1920 by 1080 pixels and the default page
-layout uses approximately 1600 by 900 CSS pixels. **Check video** includes the
+layout uses 1920 by 1080 CSS pixels. **Check video** includes the
 actual output resolution. Detailed zoom and color-preference readback is available
 in diagnostic mode; standard mode does not attach a debugger to inspect pages.
 

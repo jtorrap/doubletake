@@ -35,8 +35,8 @@ const fs = require('fs');
       await canvas.focus();
       await canvas.scrollIntoViewIfNeeded();
       const box = await canvas.boundingBox();
-      // Remote page coordinates include its actual 120% browser zoom.
-      await page.mouse.click(box.x + box.width * (x*1.2)/1920, box.y + box.height * (y*1.2)/1080, {delay:60});
+      // Remote CSS coordinates match output pixels at the default 100% zoom.
+      await page.mouse.click(box.x + box.width * x/1920, box.y + box.height * y/1080, {delay:60});
     }
     await clickRemote(180, 570);
     await page.keyboard.type('keyboard works');
