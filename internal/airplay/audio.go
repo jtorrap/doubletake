@@ -1065,6 +1065,12 @@ func (as *AudioStream) Close() {
 // StreamAudio reads encoded frames from the capture pipeline and sends
 // RTP audio packets to the receiver. It also sends periodic sync packets.
 func (s *MirrorSession) StreamAudio(ctx context.Context, capture *AudioCapture, audioStream *AudioStream) error {
+	stats, stopStats := startAudioStats(ctx, audioStream.ct, audioLatencyDuration(audioStream.latencySamples))
+	defer stopStats()
+	return s.streamAudio(ctx, capture, audioStream, stats)
+}
+
+func (s *MirrorSession) streamAudio(ctx context.Context, capture *AudioCapture, audioStream *AudioStream, stats *audioStats) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() {
@@ -1095,11 +1101,16 @@ func (s *MirrorSession) StreamAudio(ctx context.Context, capture *AudioCapture, 
 		default:
 		}
 
-		if _, _, err := capture.ReadFrameAt(prewarmBuf); err != nil {
+		n, pts, err := capture.ReadFrameAt(prewarmBuf)
+		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
 			return fmt.Errorf("audio prewarm: %w", err)
+		}
+		if n > 0 {
+			stats.captured(pts, time.Now())
+			stats.dropped(true, false)
 		}
 		prewarmedFrames++
 	}
@@ -1137,7 +1148,11 @@ videoReady:
 			}
 			return fmt.Errorf("audio read first frame: %w", err)
 		}
+		if firstFrameSize > 0 {
+			stats.captured(firstFramePosition.PTS, time.Now())
+		}
 		if firstFrameSize > 0 && audioFrameIsStale(firstFramePosition.PTS, time.Now(), audioStream.latencySamples) {
+			stats.dropped(true, true)
 			catchupFrames++
 			if catchupFrames >= maximumInitialCatchupFrames {
 				age := time.Since(firstFramePosition.PTS)
@@ -1247,7 +1262,11 @@ videoReady:
 		if err := burstLimiter.wait(ctx); err != nil {
 			return 0, err
 		}
-		return audioStream.sendAudioPacketWithSeqAndNonce(payload, rtpTime, seq, reuseNonce)
+		nonce, err := audioStream.sendAudioPacketWithSeqAndNonce(payload, rtpTime, seq, reuseNonce)
+		if err == nil {
+			stats.sentPacket()
+		}
+		return nonce, err
 	}
 
 	const retransmitDepth = 8
@@ -1288,6 +1307,9 @@ videoReady:
 				return fmt.Errorf("audio read frame: %w", err)
 			}
 			framePTS = framePosition.PTS
+			if n > 0 {
+				stats.captured(framePTS, time.Now())
+			}
 		}
 		if n == 0 {
 			continue
@@ -1299,6 +1321,7 @@ videoReady:
 			framePosition.PTS = framePTS
 		}
 		if !usingFirstFrame && timestampedAudio && audioFrameIsStale(framePTS, time.Now(), audioStream.latencySamples) {
+			stats.dropped(false, true)
 			staleFrames++
 			if staleFrames == 1 || staleFrames%100 == 0 {
 				dbg("[AUDIO] dropping stale source frame %v old (latency=%v, dropped=%d)",
@@ -1316,6 +1339,7 @@ videoReady:
 				var reset bool
 				frameRTP, reset = rtpClock.mapFramePosition(framePosition, spf)
 				if reset {
+					stats.rebased()
 					clockNow, timelineID := s.audioClockAt(framePTS)
 					err := audioStream.sendSyncPacketAt(s.timingProtocol, clockNow, timelineID, frameRTP, true)
 					announceMu.Unlock()
@@ -1369,6 +1393,7 @@ videoReady:
 			retransmitIdx = (retransmitIdx + 1) % retransmitDepth
 		}
 
+		stats.sentFrame()
 		frameSeq++
 
 		if frameCount <= 10 || frameCount%100 == 0 {
