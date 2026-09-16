@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.14
+
+- Keep YouTube headers, recommendations, and comments outside the full-window video.
+- Reveal consent and playback prompts when interaction is needed, then restore the player after playback resumes.
+
 ## 0.1.13
 
 - Fix YouTube native-host discovery with the production startup permissions.

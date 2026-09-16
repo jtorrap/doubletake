@@ -92,6 +92,12 @@ function row(id,percent=0,query='',title='Synthetic video') {
   return `<ytd-playlist-video-renderer style="display:block;height:100px"><a id="video-title" href="/watch?v=${id}${query}">${title}</a><ytd-thumbnail-overlay-resume-playback-renderer style="display:block;width:100px"><div id="progress" style="height:4px;width:${percent}%"></div></ytd-thumbnail-overlay-resume-playback-renderer></ytd-playlist-video-renderer>`;
 }
 const playerHTML='<style>body{margin:0}#outer{transform:translate(80px,60px);contain:paint;width:320px;height:180px}#movie_player{width:320px;height:180px;background:#14283c}video{background:#18324b}</style><div id="outer"><div id="movie_player"><div class="html5-video-container"><video></video></div></div></div>';
+const layeredPlayerHTML=playerHTML.replace('<video></video>','<video></video><button id="playerControl" style="position:absolute;left:20px;bottom:20px;z-index:30">Player control</button><span id="hiddenTooltip" style="visibility:hidden">Hidden player tooltip</span>')+
+  '<style>.page-overlay{position:fixed;z-index:2147483647;background:#c03040;color:white}</style>'+
+  '<div id="masthead" class="page-overlay" style="inset:0 0 auto;height:60px">Masthead</div>'+
+  '<aside id="related" class="page-overlay" style="right:0;top:60px;width:280px;height:300px">Related videos</aside>'+
+  '<div id="metadata" class="page-overlay" style="bottom:100px;left:0;right:0;height:80px">Metadata</div>'+
+  '<div id="comments" class="page-overlay" style="bottom:0;left:0;right:0;height:100px">Comments</div>';
 async function browserTests() {
   const browser=await chromium.launch({executablePath:process.env.CHROME_PATH || (process.platform==='darwin'?'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome':'/usr/bin/google-chrome'),args:process.platform==='linux'?['--no-sandbox']:[]});
   const errors=[];
@@ -166,12 +172,18 @@ async function browserTests() {
     await page.evaluate(()=>fixtureCancel());await page.clock.runFor(9000);
     assert.equal(await page.evaluate(()=>fixtureMessages.some(value=>value.type==='queue')),false,'Cancelled collector exported a queue');
     await page.close();
-    page=await fixture(watch(ids[0]),playerHTML);
+    page=await fixture(watch(ids[0]),layeredPlayerHTML+'<ytd-enforcement-message-view-model></ytd-enforcement-message-view-model>');
     await page.evaluate(plan=>fixtureApply(plan),playPlan);await page.clock.runFor(250);
     assert.equal(await page.evaluate(()=>media.playCalls),1,'Initial playback not started exactly once');
+    assert.equal(await page.evaluate(()=>fixtureMessages.some(value=>value.state==='needs_interaction')),false,'Empty prompt placeholder blocked playback');
     assert.equal(await page.evaluate(()=>media.currentTime),75,'Companion replaced YouTube remembered position');
     const boxes=await page.evaluate(()=>['#movie_player','#movie_player video'].map(selector=>{const b=document.querySelector(selector).getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height};}));
     for(const box of boxes)assert.deepEqual(box,{x:0,y:0,width:960,height:540},'Player or video does not fill viewport');
+    assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.page-overlay')].every(element=>getComputedStyle(element).visibility==='hidden')),'Page chrome still overlays fullscreen video');
+    assert.ok(await page.evaluate(()=>[[1,1],[959,1],[959,539],[1,539],[480,270],[945,275]].every(([x,y])=>document.elementFromPoint(x,y)?.closest('#movie_player'))),'Fullscreen hit target escaped player');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#playerControl')).visibility),'visible');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#hiddenTooltip')).visibility),'hidden','Fullscreen forced a hidden player tooltip visible');
+    assert.equal(await page.evaluate(()=>{const b=document.querySelector('#playerControl').getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.id;}),'playerControl');
     if(output){fs.mkdirSync(output,{recursive:true});await page.screenshot({path:path.join(output,'youtube-fullscreen.png')});}
     await page.evaluate(()=>{media.paused=true;});await page.clock.runFor(2000);
     assert.equal(await page.evaluate(()=>media.playCalls),1,'Controller undid user pause');
@@ -184,8 +196,30 @@ async function browserTests() {
     assert.equal(await page.evaluate(()=>fixtureMessages.filter(value=>value.type==='ended').length),1,'Content end did not advance exactly once');
     await page.evaluate(()=>fixtureCancel());
     assert.equal(await page.locator('html[data-doubletake-player]').count(),0);
+    assert.ok(await page.evaluate(()=>[...document.querySelectorAll('.page-overlay')].every(element=>getComputedStyle(element).visibility==='visible')),'Cancel failed to restore page chrome');
+    assert.equal(await page.evaluate(()=>document.elementFromPoint(10,10)?.id),'masthead','Cancel left player covering masthead');
     await page.evaluate(plan=>fixtureApply(plan),playPlan);await page.clock.runFor(500);
     assert.equal(await page.locator('html[data-doubletake-player]').count(),0,'Cancelled generation reactivated');
+    await page.close();
+    page=await fixture(watch(ids[0]),layeredPlayerHTML+'<div id="consent" role="dialog" aria-modal="true" style="display:none;position:fixed;left:300px;top:120px;width:360px;height:240px;z-index:2147483647;background:white">Consent choice</div>');
+    await page.evaluate(plan=>fixtureApply(plan),playPlan);await page.clock.runFor(250);
+    await page.evaluate(()=>{document.querySelector('#consent').style.display='block';media.paused=true;});
+    await page.clock.runFor(250);
+    assert.equal(await page.locator('html[data-doubletake-player]').count(),0,'Interaction prompt remained hidden behind fullscreen mask');
+    assert.equal(await page.evaluate(()=>fixtureMessages.filter(value=>value.type==='status').at(-1).state),'needs_interaction');
+    assert.equal(await page.evaluate(()=>document.elementFromPoint(480,240)?.id),'consent');
+    await page.evaluate(plan=>fixtureApply(plan),playPlan);await page.clock.runFor(1000);
+    assert.equal(await page.locator('html[data-doubletake-player]').count(),0,'Repeated apply hid interaction prompt');
+    await page.evaluate(()=>{document.querySelector('#consent').style.display='none';});await page.clock.runFor(1000);
+    assert.equal(await page.locator('html[data-doubletake-player]').count(),0,'Paused playback reset interaction lock');
+    await page.evaluate(()=>{media.paused=false;media.currentTime++;});await page.clock.runFor(250);
+    assert.equal(await page.locator('html[data-doubletake-player]').count(),1,'Actual playback did not restore fullscreen');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#related')).visibility),'hidden');
+    assert.equal(await page.evaluate(()=>media.playCalls),1,'Interaction recovery forced another playback attempt');
+    await page.evaluate(()=>{const error=document.createElement('yt-playability-error-supported-renderers');error.style.display='block';error.textContent='Sign in to confirm your age';document.body.append(error);media.paused=true;});
+    await page.clock.runFor(250);
+    assert.equal(await page.locator('html[data-doubletake-player]').count(),0,'Fullscreen mask hid a newly rendered playback error');
+    assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('yt-playability-error-supported-renderers')).visibility),'visible');
     await page.close();
     page=await fixture(watch(ids[0]),playerHTML);
     await page.evaluate(()=>fixtureListener({type:'cancel',launch_id:1},{id:'fixture-extension'},()=>{}));
@@ -206,4 +240,4 @@ async function browserTests() {
     assert.deepEqual(errors,[]);
   } finally {await browser.close();}
 }
-(async()=>{await backgroundTests();await browserTests();console.log(JSON.stringify({native_command_validation:true,private_status_only:true,stale_document_rejected:true,serialized_queue_navigation:true,duplicate_end_guard:true,playlist_order_and_progress:true,paginated_collection:true,no_history_mutation:true,sign_in_status:true,cancelled_generation:true,autoplay_and_remembered_position:true,user_pause_retained:true,ad_end_guard:true,fullscreen_player_and_video:true,unavailable_skip:true}));})().catch(error=>{console.error(error);process.exit(1);});
+(async()=>{await backgroundTests();await browserTests();console.log(JSON.stringify({native_command_validation:true,private_status_only:true,stale_document_rejected:true,serialized_queue_navigation:true,duplicate_end_guard:true,playlist_order_and_progress:true,paginated_collection:true,no_history_mutation:true,sign_in_status:true,cancelled_generation:true,autoplay_and_remembered_position:true,user_pause_retained:true,ad_end_guard:true,fullscreen_player_and_video:true,fullscreen_hit_targets_and_cleanup:true,interaction_prompts_visible:true,unavailable_skip:true}));})().catch(error=>{console.error(error);process.exit(1);});

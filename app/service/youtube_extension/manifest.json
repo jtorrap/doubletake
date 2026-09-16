@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Doubletake YouTube Playback",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Plays requested YouTube videos and unfinished Watch Later items for Doubletake Browser.",
   "permissions": ["nativeMessaging"],
   "host_permissions": ["https://www.youtube.com/*"],

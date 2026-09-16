@@ -2,6 +2,12 @@
 html[data-doubletake-player], html[data-doubletake-player] body {
   overflow:hidden !important; background:#000 !important;
 }
+/* Separate stacking contexts can paint page chrome over even a fixed player.
+   Hide only elements outside its subtree, preserving the player's own hidden
+   controls/tooltips. A visible child still paints inside a hidden ancestor. */
+html[data-doubletake-player] body :not(#movie_player, #movie_player *) {
+  visibility:hidden !important;
+}
 /* YouTube's ancestor transforms/containment must not trap a fixed player in
    the normal watch-page column or underneath a separate stacking context. */
 html[data-doubletake-player] body :has(#movie_player) {
@@ -10,6 +16,7 @@ html[data-doubletake-player] body :has(#movie_player) {
   contain:none !important; isolation:auto !important; z-index:auto !important;
 }
 html[data-doubletake-player] #movie_player {
+  visibility:visible !important;
   position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important;
   min-width:0 !important; max-width:none !important; max-height:none !important;
   margin:0 !important; transform:none !important;

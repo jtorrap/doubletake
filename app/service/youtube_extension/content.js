@@ -2,22 +2,42 @@
   'use strict';
   const VIDEO = /^[A-Za-z0-9_-]{11}$/;
   let plan = null, timer = null, task = 0, lastState = '', started = false, ended = false;
-  let lastMediaTime = 0, progressAt = 0, appliedAt = 0, leavingAd = false, latestLaunch = 0, cancelledLaunch = 0;
+  let lastMediaTime = 0, progressAt = 0, appliedAt = 0, leavingAd = false, latestLaunch = 0, cancelledLaunch = 0, interactionRequired = false;
   function send(type, extra={}) {
     if (!plan) return;
     chrome.runtime.sendMessage({type,launch_id:plan.launch_id,index:plan.index,...extra}).catch(()=>{});
   }
   function status(state,error=false) {
+    if (state === 'needs_interaction') {
+      interactionRequired=true;
+      document.documentElement.removeAttribute('data-doubletake-player');
+    } else if (state === 'playing') {
+      interactionRequired=false;
+      document.documentElement.setAttribute('data-doubletake-player','');
+    }
     if (lastState === state) return;
     lastState = state; send('status',{state,error});
   }
   function cancel(block=false,revoked=latestLaunch) {
     if (block) {latestLaunch=Math.max(latestLaunch,revoked);cancelledLaunch=latestLaunch;}
-    task++; plan=null; clearInterval(timer); timer=null;
+    task++; plan=null; interactionRequired=false; clearInterval(timer); timer=null;
     document.documentElement.removeAttribute('data-doubletake-player');
   }
   function videoID() { return new URL(location.href).searchParams.get('v'); }
   function visible(element) { return !!(element && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden'); }
+  function pageVisible(element) {
+    if (!element) return false;
+    const root=document.documentElement;
+    const unmask=root.hasAttribute('data-doubletake-player') && !element.closest('#movie_player');
+    // Only inspect actual prompt candidates without the companion's mask;
+    // otherwise our fullscreen CSS would hide the very prompt we need to show.
+    if (unmask) root.removeAttribute('data-doubletake-player');
+    // YouTube may keep an empty custom-element placeholder in the document;
+    // a zero-area client rect is not an interaction prompt.
+    const result=visible(element) && [...element.getClientRects()].some(rect=>rect.width>0 && rect.height>0);
+    if (unmask && !interactionRequired) root.setAttribute('data-doubletake-player','');
+    return result;
+  }
   function progress(row) {
     const bar = row.querySelector('ytd-thumbnail-overlay-resume-playback-renderer #progress, yt-thumbnail-overlay-progress-bar-view-model .ytThumbnailOverlayProgressBarHostWatchedProgressBarSegment');
     if (!bar) return 0;
@@ -99,15 +119,19 @@
       return;
     }
     const player = document.getElementById('movie_player');
-    if (player) document.documentElement.setAttribute('data-doubletake-player','');
+    const prompt=[...document.querySelectorAll('ytd-consent-bump-v2-lightbox, ytd-enforcement-message-view-model, tp-yt-paper-dialog[opened], dialog[open], [role="dialog"][aria-modal="true"]')]
+      .find(element=>!element.closest('#movie_player') && pageVisible(element));
+    if (prompt) {status('needs_interaction',true);return;}
     const error = document.querySelector('yt-playability-error-supported-renderers');
-    if (visible(error)) {
+    if (pageVisible(error)) {
       const text = error.textContent || '';
       if (/private video|video unavailable|video has been removed|video is unavailable|deleted video/i.test(text)) {
         if (!ended) {ended=true; send('unavailable',{video_id:plan.video_id});}
+        if (plan.mode === 'video') status('needs_interaction',true);
       } else status('needs_interaction',true);
       return;
     }
+    if (player && !interactionRequired) document.documentElement.setAttribute('data-doubletake-player','');
     if (!video) {
       if (performance.now()-appliedAt>30000) status('needs_interaction',true);
       return;
