@@ -126,7 +126,8 @@ async function browserTests() {
     await page.clock.runFor(9000);
     let queues=await page.evaluate(()=>fixtureMessages.filter(value=>value.type==='queue'));
     assert.equal(queues.length,1);
-    assert.deepEqual(queues[0].items,[{id:ids[2],start:75},{id:ids[3],start:null}]);
+    assert.deepEqual(queues[0].items,[{id:ids[1],start:null},{id:ids[2],start:75},{id:ids[3],start:null}],
+      '99% watched must remain resumable; only a full 100% meter is complete');
     assert.equal(await page.locator('ytd-playlist-video-renderer').count(),5,'Collection removed playlist items');
     await page.evaluate(plan=>fixtureApply(plan),{...collectPlan,launch_id:2,resume:false});
     await page.clock.runFor(9000);

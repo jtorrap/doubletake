@@ -103,7 +103,7 @@ selected set, disconnecting other receivers before opening the new video.
 
 Choose **Watch Later** to use the YouTube account signed in to this browser.
 The app reads the playlist in its displayed order, skips videos whose visible
-watch-progress bar is complete (99% or more), and plays the remaining videos in
+watch-progress bar is full (100%), and plays the remaining videos in
 order. **Include partly watched videos** is enabled by default: YouTube resumes
 them using its remembered playback position. Turn it off to skip videos showing
 any watch progress. The app leaves your playlist entries and watch history in
@@ -114,8 +114,8 @@ sign-in, consent, age-check or other page requiring interaction is shown as
 **Needs interaction**; complete it through the preview. A playlist without
 usable progress indicators cannot reveal watched state the account no longer
 remembers. This mode depends on YouTube's current page layout. Queues are limited
-to 5,000 items and three minutes of list loading; exceeding either limit reports
-an error instead of silently playing a partial list.
+to 5,000 items and three minutes of list loading; exceeding either limit stops
+for attention instead of silently playing a partial list.
 
 YouTube playback status is separate from each TV's connection status. The page's
 Pause control pauses playback. Opening a saved page, using the navigation

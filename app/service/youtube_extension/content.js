@@ -43,7 +43,7 @@
     const watched = progress(row);
     // The visible meter only selects items. YouTube resumes its own saved
     // position; never estimate seek times or modify history or Watch Later.
-    if (watched >= 99 || (!plan.resume && watched > 0)) return null;
+    if (watched >= 100 || (!plan.resume && watched > 0)) return null;
     const start = startTime(url.searchParams.get('t') || '');
     return {id,start:plan.resume && start !== null && start <= 604800 ? start : null};
   }
