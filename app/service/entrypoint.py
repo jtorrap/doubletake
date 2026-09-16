@@ -28,6 +28,13 @@ def main():
     if not 1024 <= port <= 65535:
         raise RuntimeError("Supervisor did not allocate an ingress port")
     options = json.loads(Path("/data/options.json").read_text())
+    # This is the container-private /tmp, including when Supervisor mounts it
+    # as tmpfs. Xvnc requires root to create the standard sticky socket folder.
+    sockets = Path('/tmp/.X11-unix')
+    if sockets.is_symlink():
+        raise RuntimeError('invalid_private_display_directory')
+    sockets.mkdir(mode=0o1777, exist_ok=True)
+    sockets.chmod(0o1777)
     qualities = {
         "1080p_15": {"width": 1920, "height": 1080, "fps": 15, "bitrate": 6000, "hwaccel": "none"},
         "1080p_30": {"width": 1920, "height": 1080, "fps": 30, "bitrate": 8000, "hwaccel": "none"},

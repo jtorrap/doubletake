@@ -34,39 +34,65 @@ jobs:
         run: |
           docker run --rm -i --network none --user 1000:1000 --entrypoint python3 doubletake-app -B - <<'PY'
           import os
+          from pathlib import Path
           import select
           import signal
+          import socket
+          import stat
           import subprocess
           import sys
+          import tempfile
+          from display import _private_vnc_password
 
-          # Disposable container only: no browser, profile, credentials, mounts,
-          # RFB listener, X TCP listener, or external network. This is the only
-          # place where raw Xvnc startup errors may be printed.
-          read_fd, write_fd = os.pipe()
-          process = subprocess.Popen([
-              'Xvnc', '-displayfd', str(write_fd), '-geometry', '1920x1080',
-              '-depth', '24', '-nolisten', 'tcp', '-noreset',
-              '-rfbport', '-1', '-rendernode', '', '-desktop', 'CI display probe'],
-              pass_fds=(write_fd,), stdin=subprocess.DEVNULL,
-              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-              text=True, start_new_session=True)
-          os.close(write_fd)
-          ready = False
-          try:
-              if select.select([read_fd], [], [], 10)[0]:
-                  number = os.read(read_fd, 32).strip()
-                  ready = number.isdigit() and process.poll() is None
-          finally:
-              os.close(read_fd)
-              if process.poll() is None:
-                  os.killpg(process.pid, signal.SIGTERM)
+          # Disposable container only: no browser, profile, real credentials, mounts,
+          # TCP listeners, or external network. Only this synthetic probe prints raw
+          # Xvnc startup errors. Xvnc requires an incoming endpoint, so use a private
+          # Unix socket with a one-time password confined to this disposable container.
+          os.umask(0o077)
+          with tempfile.TemporaryDirectory(prefix='xvnc-probe-') as directory:
+              runtime = Path(directory)
+              password = runtime / 'xvnc.pass'
+              rfb = runtime / 'xvnc-rfb'
+              _private_vnc_password(password)
+              read_fd, write_fd = os.pipe()
+              process = subprocess.Popen([
+                  'Xvnc', '-displayfd', str(write_fd), '-geometry', '1920x1080',
+                  '-depth', '24', '-nolisten', 'tcp', '-noreset', '-rfbport', '-1',
+                  '-rfbunixpath', str(rfb), '-rfbunixmode', '0600',
+                  '-SecurityTypes', 'VncAuth', '-PasswordFile', str(password),
+                  '-rendernode', '', '-desktop', 'CI display probe'],
+                  pass_fds=(write_fd,), stdin=subprocess.DEVNULL,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                  text=True, start_new_session=True)
+              os.close(write_fd)
+              ready = False
               try:
-                  _, errors = process.communicate(timeout=3)
-              except subprocess.TimeoutExpired:
-                  os.killpg(process.pid, signal.SIGKILL)
-                  _, errors = process.communicate(timeout=3)
-              print(errors[-16384:])
-          print('Disposable Xvnc display ready:', ready)
+                  if select.select([read_fd], [], [], 10)[0]:
+                      number = os.read(read_fd, 32).strip()
+                      ready = number.isdigit() and process.poll() is None
+                  if ready:
+                      assert stat.S_ISSOCK(rfb.stat().st_mode)
+                      assert stat.S_IMODE(rfb.stat().st_mode) == 0o600
+                      assert stat.S_IMODE(password.stat().st_mode) == 0o600
+                      with socket.socket(socket.AF_UNIX) as connection:
+                          connection.settimeout(2)
+                          connection.connect(str(rfb))
+                          stream = connection.makefile('rb')
+                          version = stream.read(12)
+                          assert version == b'RFB 003.008\n'
+                          connection.sendall(version)
+                          assert stream.read(2) == b'\x01\x02', 'VncAuth must be the only security type'
+              finally:
+                  os.close(read_fd)
+                  if process.poll() is None:
+                      os.killpg(process.pid, signal.SIGTERM)
+                  try:
+                      _, errors = process.communicate(timeout=3)
+                  except subprocess.TimeoutExpired:
+                      os.killpg(process.pid, signal.SIGKILL)
+                      _, errors = process.communicate(timeout=3)
+                  print(errors[-16384:])
+          print('Disposable authenticated Xvnc display ready:', ready)
           sys.exit(0 if ready else 1)
           PY
       - name: App boundary and lifecycle tests

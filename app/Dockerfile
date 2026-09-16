@@ -30,20 +30,22 @@ RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://
        intel-media-va-driver-non-free libva-drm2 vainfo libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers libfdk-aac2 \
     && rm -rf /var/lib/apt/lists/*
 # Upstream's distribution-neutral Xvnc supports render-node DRI3 on headless
-# hosts. Its own RFB listener is disabled; x11vnc keeps the existing preview.
+# hosts. Its TCP listener is disabled; x11vnc keeps the existing preview.
 RUN apt-get update && apt-get install -y --no-install-recommends \
        libgbm1 libxcvt0 libxshmfence1 libgnutls30 libnettle8 libhogweed6 \
        libgmp10 libpam0g libsystemd0 x11-utils mesa-utils \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL --retry 2 https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.tar.gz -o /tmp/tigervnc.tar.gz \
     && echo '5b70c84baefc09a030cfc78315c34ccb55b2a0dde4092b7da67a1962c5f0dea6  /tmp/tigervnc.tar.gz' | sha256sum -c - \
-    && tar -xzf /tmp/tigervnc.tar.gz -C /tmp tigervnc-1.16.2.x86_64/usr/bin/Xvnc tigervnc-1.16.2.x86_64/usr/share/doc/tigervnc \
+    && tar -xzf /tmp/tigervnc.tar.gz -C /tmp tigervnc-1.16.2.x86_64/usr/bin/Xvnc tigervnc-1.16.2.x86_64/usr/bin/vncpasswd tigervnc-1.16.2.x86_64/usr/share/doc/tigervnc \
     && install -m 755 /tmp/tigervnc-1.16.2.x86_64/usr/bin/Xvnc /usr/local/bin/Xvnc \
+    && install -m 755 /tmp/tigervnc-1.16.2.x86_64/usr/bin/vncpasswd /usr/local/bin/tigervncpasswd \
     && cp -R /tmp/tigervnc-1.16.2.x86_64/usr/share/doc/tigervnc /usr/share/doc/ \
     && ldd /usr/local/bin/Xvnc > /tmp/xvnc-libraries \
     && ! grep -q 'not found' /tmp/xvnc-libraries \
     && rm /tmp/tigervnc.tar.gz /tmp/xvnc-libraries \
-    && rm -rf /tmp/tigervnc-1.16.2.x86_64
+    && rm -rf /tmp/tigervnc-1.16.2.x86_64 \
+    && install -d -m 1777 /tmp/.X11-unix
 COPY --from=engine /doubletake /usr/local/bin/doubletake
 COPY --from=engine /src/scripts/doubletake-browser /opt/doubletake/launcher.py
 COPY service/ /opt/browser-app/

@@ -7,6 +7,8 @@ https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2
 SHA-256: 5b70c84baefc09a030cfc78315c34ccb55b2a0dde4092b7da67a1962c5f0dea6
 Archive bytes: 15042988
 Xvnc member: tigervnc-1.16.2.x86_64/usr/bin/Xvnc (13821240 bytes)
+Password helper: tigervnc-1.16.2.x86_64/usr/bin/vncpasswd
+Install helper as /usr/local/bin/tigervncpasswd to avoid package-name conflicts.
 
 Read-only ELF inspection found maximum required GLIBC symbol version 2.28,
 compatible with bookworm's 2.36. The binary contains -displayfd and -rendernode.
@@ -20,8 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fL https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.tar.gz -o /tmp/tigervnc.tar.gz \
     && echo '5b70c84baefc09a030cfc78315c34ccb55b2a0dde4092b7da67a1962c5f0dea6  /tmp/tigervnc.tar.gz' | sha256sum -c - \
-    && tar -xzf /tmp/tigervnc.tar.gz -C /tmp tigervnc-1.16.2.x86_64/usr/bin/Xvnc \
+    && tar -xzf /tmp/tigervnc.tar.gz -C /tmp tigervnc-1.16.2.x86_64/usr/bin/Xvnc tigervnc-1.16.2.x86_64/usr/bin/vncpasswd \
     && install -m 755 /tmp/tigervnc-1.16.2.x86_64/usr/bin/Xvnc /usr/local/bin/Xvnc \
+    && install -m 755 /tmp/tigervnc-1.16.2.x86_64/usr/bin/vncpasswd /usr/local/bin/tigervncpasswd \
     && rm /tmp/tigervnc.tar.gz \
     && rm -rf /tmp/tigervnc-1.16.2.x86_64
 
@@ -38,13 +41,20 @@ auto selects Xvnc when its binary and an accessible render node are present,
 requires a successful DRI3 query, and stops a failed display before Xvfb fallback.
 Forced xvnc on GPU-free CI uses -rendernode '' and must not silently fall back.
 
-The Xvnc display uses -rfbport -1, so it has no TCP RFB listener; no RFB UNIX
-socket is configured. X11 TCP is disabled and MIT-MAGIC-COOKIE-1 authentication
-uses the worker's private Xauthority. Existing x11vnc preview authentication and
-its native-control viewonly guard remain unchanged.
+The Xvnc display uses -rfbport -1, so it has no TCP RFB listener. Upstream
+requires at least one incoming endpoint. Its RFB endpoint is therefore a Unix
+socket inside the worker's private 0700 runtime, with socket mode 0600 and
+SecurityTypes=VncAuth only. A fresh eight-byte password is passed to the pinned
+tigervncpasswd -f helper on stdin; its eight-byte output is stored in an
+exclusive-created mode-0600 file. Neither password is logged or placed in
+process arguments. These private files disappear with the worker runtime.
+X11 TCP is disabled and MIT-MAGIC-COOKIE-1 authentication uses the worker's
+private Xauthority. Existing x11vnc preview authentication and its native-control
+viewonly guard remain unchanged.
 
 Validation needed:
-- ldd /usr/local/bin/Xvnc has no missing dependencies.
+- ldd /usr/local/bin/Xvnc and tigervncpasswd have no missing dependencies.
+- Disposable network-free startup verifies mode-0600 socket and VncAuth-only RFB.
 - Xvnc forced in native and diagnostic integration, including input/paste/close.
 - CPU-only CI reports backend=xvnc; DRI3=false is expected without render node.
 - Live Intel host reports backend=xvnc, DRI3=true, Intel GL renderer.

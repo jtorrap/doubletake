@@ -17,6 +17,7 @@ import time
 
 sys.path.insert(0, '/opt/browser-app')
 from audio import SINK, SAMPLE_RATE, CHANNELS
+from fixture_runtime import process_info, resolve_runtime
 
 
 def command(environment, *arguments):
@@ -88,9 +89,8 @@ def check_unix_sockets(rows, inodes, expected):
 
 
 def main():
-    runtimes = list(Path('/tmp').glob('doubletake-app-*'))
-    assert len(runtimes) == 1, 'Fixture must own exactly one browser runtime'
-    directory = runtimes[0] / 'audio'
+    fixture = resolve_runtime()
+    directory = fixture['runtime'] / 'audio'
     sock = directory / 'native'
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert sock.is_socket() and sock.stat().st_uid == os.getuid()
@@ -113,12 +113,11 @@ def main():
                for item in inputs), 'Chrome is not connected to the private sink'
     processes = []
     for process in Path('/proc').glob('[0-9]*'):
-        try:
-            if (process / 'comm').read_text().strip() == 'pulseaudio':
-                processes.append(process)
-        except FileNotFoundError:
-            pass  # Unrelated short-lived Chrome processes may exit mid-listing.
-    assert len(processes) == 1
+        info = process_info(process)
+        if info and info['comm'] == 'pulseaudio':
+            assert info['parent'] == fixture['worker_pid'], 'Unexpected same-user PulseAudio owner'
+            processes.append(process)
+    assert len(processes) == 1, 'Fixture worker must own exactly one PulseAudio process'
     inodes = set()
     for fd in (processes[0] / 'fd').iterdir():
         try:

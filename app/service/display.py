@@ -1,8 +1,8 @@
 """Private X11 display with optional render-node acceleration.
 
-Xvnc supplies DRI3 without a physical display or DRM master. Its own RFB
-listener is disabled; the existing authenticated x11vnc preview and native
-input guard continue to own interaction. No browser/profile data is touched.
+Xvnc supplies DRI3 without a physical display or DRM master. Its required RFB
+endpoint is a private authenticated Unix socket; the existing x11vnc preview
+and native input guard continue to own interaction. No profile data is touched.
 """
 import os
 from pathlib import Path
@@ -45,6 +45,28 @@ def _capabilities(environment):
     return {'dri3': dri3, 'gl_renderer': renderer}
 
 
+def _private_vnc_password(path):
+    # VNC passwords use eight bytes. The socket and password file are also
+    # protected by the worker's private 0700 runtime and their own 0600 modes.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        result = subprocess.run(['tigervncpasswd', '-f'],
+                                input=(secrets.token_urlsafe(6) + '\n').encode('ascii'),
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=5)
+        if not isinstance(result.stdout, bytes) or len(result.stdout) != 8:
+            raise RuntimeError('xvnc_password_failed')
+        with os.fdopen(fd, 'wb') as output:
+            fd = None
+            output.write(result.stdout)
+    except BaseException:
+        Path(path).unlink(missing_ok=True)
+        raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _xvnc_command(binary, config, display_fd, authority, node):
     width, height = config['width'], config['height']
     if (type(width) is not int or type(height) is not int or
@@ -52,19 +74,27 @@ def _xvnc_command(binary, config, display_fd, authority, node):
         raise ValueError('invalid_display_geometry')
     return [binary, '-displayfd', str(display_fd), '-geometry', f'{width}x{height}',
             '-depth', '24', '-nolisten', 'tcp', '-auth', str(authority), '-noreset',
-            '-rfbport', '-1', '-rendernode', str(node) if node is not None else '',
+            '-rfbport', '-1', '-rfbunixpath', str(authority.parent / 'xvnc-rfb'),
+            '-rfbunixmode', '0600', '-SecurityTypes', 'VncAuth',
+            '-PasswordFile', str(authority.parent / 'xvnc.pass'),
+            '-rendernode', str(node) if node is not None else '',
             '-desktop', 'Doubletake Browser']
 
 
 def _start_xvnc(config, runtime, engine, binary, node):
     environment = engine.isolated_environment(os.environ, runtime)
     authority = Path(runtime) / 'Xauthority'
+    password = Path(runtime) / 'xvnc.pass'
+    socket_path = Path(runtime) / 'xvnc-rfb'
+    if os.path.lexists(password) or os.path.lexists(socket_path):
+        raise FileExistsError('display_runtime_not_empty')
     # The runtime is already private and owned by this worker. Exclusive create
     # prevents overwriting another display's authorization if a caller errs.
     fd = os.open(authority, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)
     cookie = secrets.token_hex(16)
     process = None
+    password_created = False
     read_fd = write_fd = None
 
     def authorize(display_name):
@@ -74,6 +104,8 @@ def _start_xvnc(config, runtime, engine, binary, node):
                        check=True, timeout=5)
 
     try:
+        _private_vnc_password(password)
+        password_created = True
         # Xserver accepts the cookie before displayfd chooses the final number.
         # Then add the client-side entry for the allocated private display.
         authorize(':0')
@@ -102,6 +134,10 @@ def _start_xvnc(config, runtime, engine, binary, node):
         # Stop the whole owned display group before permitting an Xvfb retry.
         engine.stop(process)
         authority.unlink(missing_ok=True)
+        if password_created:
+            password.unlink(missing_ok=True)
+        if process is not None:
+            socket_path.unlink(missing_ok=True)
         raise
     finally:
         cookie = ''

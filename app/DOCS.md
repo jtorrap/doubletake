@@ -114,7 +114,8 @@ Chrome to render without Xvfb's synchronous GPU-to-CPU presentation path.
 If startup or the DRI3 check fails, it returns to Xvfb. **xvfb** selects the
 previous backend; **xvnc** requires the new one. Changing this setting restarts
 the app. Both use a private authenticated X11 display and the same preview;
-Xvnc's built-in network listener is disabled. Check video reports the backend,
+Xvnc's TCP listener is disabled; its required unused Unix socket stays inside
+the private runtime with a separate random password. Check video reports the backend,
 DRI3 support and display renderer. Native sign-in mode remains unchanged.
 
 The browser always reports a dark color preference and defaults to 120% page
