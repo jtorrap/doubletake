@@ -140,6 +140,8 @@ class Worker:
 
     async def diagnostics(self):
         capabilities = await asyncio.to_thread(va_capabilities)
+        audio_source = self.audio
+        audio_info = await asyncio.to_thread(audio_source.diagnostics) if audio_source else {'ready': False}
         info = gpu_info(await self.cdp.call('SystemInfo.getInfo')) if self.cdp else {}
         before = video_engine_counters()
         cpu_before = process_cpu_counters()
@@ -184,7 +186,7 @@ class Worker:
                 'display_server': self.display_info,
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
                 'audio_enabled': self.audio is not None,
-                'audio': self.audio.diagnostics() if self.audio else {'ready': False},
+                'audio': audio_info,
                 'receiver_count': len(self.senders),
                 'cpu_percent_of_one_core': cpu,
                 'video_encoder': self.encoder or 'not_started',

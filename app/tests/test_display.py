@@ -21,6 +21,9 @@ class DisplayTests(unittest.TestCase):
         self.node = Path('/dev/dri/renderD128')
         self.process = Mock()
         self.process.poll.return_value = None
+        keeper_patch = patch.object(display, 'start_keeper', return_value=Mock())
+        self.start_keeper = keeper_patch.start()
+        self.addCleanup(keeper_patch.stop)
 
     def run_command(self, command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, b'12345678' if command[0] == 'tigervncpasswd' else '', '')
@@ -62,6 +65,11 @@ class DisplayTests(unittest.TestCase):
             self.assertEqual(metadata, {'backend': 'xvnc', 'dri3': True, 'gl_renderer': 'Mesa Intel',
                                         'render_node': 'renderD128', 'fallback': None})
             self.engine.start_display.assert_not_called()
+            keeper_args = self.start_keeper.call_args.args
+            self.assertIs(keeper_args[0], process)
+            self.assertEqual(keeper_args[1], Path(directory) / 'xvnc-rfb')
+            self.assertEqual(keeper_args[2], password_call.kwargs['input'][:-1])
+            self.assertIs(process._doubletake_rfb_keeper, self.start_keeper.return_value)
 
     def test_forced_xvnc_exercises_cpu_only_ci_without_auto_render_device(self):
         with tempfile.TemporaryDirectory() as directory, \
@@ -95,6 +103,7 @@ class DisplayTests(unittest.TestCase):
             _, _, metadata = display.start_display(self.config, directory, self.engine)
             self.assertEqual(metadata['backend'], 'xvfb')
             self.assertEqual(metadata['fallback'], 'xvnc_start_failed')
+            self.start_keeper.return_value.close.assert_called_once()
 
     def test_forced_xvnc_failure_does_not_hide_behind_fallback(self):
         with tempfile.TemporaryDirectory() as directory, \

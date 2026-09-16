@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9
+
+- Keep the headless display presentation clock running when the preview is closed.
+- Measure the real X11 presentation clock in Linux tests, including disconnected preview behavior.
+- Check the private browser audio signal and mute state without recording audio.
+
 ## 0.1.8
 
 - Use a GPU-capable headless display on compatible Intel hosts, with an Xvfb fallback.

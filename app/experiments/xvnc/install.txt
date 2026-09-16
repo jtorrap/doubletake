@@ -18,7 +18,7 @@ Suggested Docker installation (keep existing x11vnc and Xvfb):
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libgbm1 libxcvt0 libxshmfence1 libgnutls30 libnettle8 libhogweed6 \
-      libgmp10 libpam0g libsystemd0 x11-utils mesa-utils \
+      libgmp10 libpam0g libsystemd0 x11-utils mesa-utils python3-pycryptodome \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fL https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.tar.gz -o /tmp/tigervnc.tar.gz \
     && echo '5b70c84baefc09a030cfc78315c34ccb55b2a0dde4092b7da67a1962c5f0dea6  /tmp/tigervnc.tar.gz' | sha256sum -c - \
@@ -52,9 +52,27 @@ X11 TCP is disabled and MIT-MAGIC-COOKIE-1 authentication uses the worker's
 private Xauthority. Existing x11vnc preview authentication and its native-control
 viewonly guard remain unchanged.
 
+Keep one authenticated idle RFB connection to that private socket. TigerVNC
+1.16.2 slows its X11 Present MSC/frame clock to 1000 ms with no authenticated
+RFB clients, even while an independent x11vnc client is displaying the screen.
+Authentication and shared ClientInit activate the normal frame clock without
+requesting any pixels or sending input. The worker's connection guard closes
+on display exit and stops its owned display if the connection unexpectedly
+fails. The generated plaintext password is used only in memory during the
+bounded handshake and is not retained by the guard or written to disk.
+
+Upstream source:
+https://github.com/TigerVNC/tigervnc/blob/v1.16.2/common/rfb/VNCServerST.cxx
+See startFrameClock and handleTimeout for the 1000-ms no-client clock; see
+queryConnection/startDesktop for authenticated-client activation.
+https://github.com/TigerVNC/tigervnc/blob/v1.16.2/unix/xserver/hw/vnc/vncPresent.c
+The Present callbacks route MSC requests through that same VNC frame clock.
+
 Validation needed:
 - ldd /usr/local/bin/Xvnc and tigervncpasswd have no missing dependencies.
 - Disposable network-free startup verifies mode-0600 socket and VncAuth-only RFB.
+- Real X11 Present-MSC timing changes from about 1 Hz without the keeper to
+  at least 45 Hz with its authenticated idle socket, then slows after closure.
 - Xvnc forced in native and diagnostic integration, including input/paste/close.
 - CPU-only CI reports backend=xvnc; DRI3=false is expected without render node.
 - Live Intel host reports backend=xvnc, DRI3=true, Intel GL renderer.
@@ -66,3 +84,7 @@ bookworm-backports amd64 Packages.xz has no tigervnc-standalone-server entry.
 Trixie's package is 1.15.0+dfsg-2.1~deb13u1 and requires glibc >=2.38; copying
 that Debian binary into bookworm is unsuitable. The official generic archive
 avoids changing the runtime distribution or compiling a second X server.
+
+The CI PresentNotifyMSC probe uses libxcb's packed CompleteNotify ABI; MSC
+is at offset36 after its inserted full_sequence field:
+https://xcb.freedesktop.org/manual/present_8h_source.html

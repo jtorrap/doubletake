@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && apt-get update && apt-get install -y --no-install-recommends \
        google-chrome-stable python3 python3-aiohttp python3-paho-mqtt python3-zeroconf \
        xvfb xauth xdotool x11vnc novnc fonts-dejavu-core fonts-liberation \
-       dbus-x11 at-spi2-core python3-pyatspi python3-xlib \
+       dbus-x11 at-spi2-core python3-pyatspi python3-xlib python3-pycryptodome \
        pulseaudio pulseaudio-utils \
        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
@@ -33,7 +33,7 @@ RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://
 # hosts. Its TCP listener is disabled; x11vnc keeps the existing preview.
 RUN apt-get update && apt-get install -y --no-install-recommends \
        libgbm1 libxcvt0 libxshmfence1 libgnutls30 libnettle8 libhogweed6 \
-       libgmp10 libpam0g libsystemd0 x11-utils mesa-utils \
+       libgmp10 libpam0g libsystemd0 libxcb-present0 x11-utils mesa-utils \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL --retry 2 https://downloads.sourceforge.net/project/tigervnc/stable/1.16.2/tigervnc-1.16.2.x86_64.tar.gz -o /tmp/tigervnc.tar.gz \
     && echo '5b70c84baefc09a030cfc78315c34ccb55b2a0dde4092b7da67a1962c5f0dea6  /tmp/tigervnc.tar.gz' | sha256sum -c - \
@@ -52,7 +52,7 @@ COPY service/ /opt/browser-app/
 RUN chmod 755 /opt/browser-app/acceleration.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.8" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.9" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

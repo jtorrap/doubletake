@@ -32,7 +32,7 @@ jobs:
           docker run --rm --cap-add SYS_ADMIN --user 1000:1000 --entrypoint /bin/sh doubletake-app -c 'timeout 20 google-chrome --headless --disable-gpu --dump-dom about:blank'
       - name: Private Xvnc startup preflight
         run: |
-          docker run --rm -i --network none --user 1000:1000 --entrypoint python3 doubletake-app -B - <<'PY'
+          docker run --rm -i --network none --user 1000:1000 -v "$PWD/app/tests:/tests:ro" --entrypoint python3 doubletake-app -B - <<'PY'
           import os
           from pathlib import Path
           import select
@@ -43,8 +43,11 @@ jobs:
           import sys
           import tempfile
           from display import _private_vnc_password
+          from rfb_keepalive import connect_keeper
+          sys.path.insert(0, "/tests")
+          from present_clock import measure
 
-          # Disposable container only: no browser, profile, real credentials, mounts,
+          # Disposable container only: no browser, profile, real credentials, writable mounts,
           # TCP listeners, or external network. Only this synthetic probe prints raw
           # Xvnc startup errors. Xvnc requires an incoming endpoint, so use a private
           # Unix socket with a one-time password confined to this disposable container.
@@ -53,7 +56,7 @@ jobs:
               runtime = Path(directory)
               password = runtime / 'xvnc.pass'
               rfb = runtime / 'xvnc-rfb'
-              _private_vnc_password(password)
+              private_password = _private_vnc_password(password)
               read_fd, write_fd = os.pipe()
               process = subprocess.Popen([
                   'Xvnc', '-displayfd', str(write_fd), '-geometry', '1920x1080',
@@ -82,6 +85,17 @@ jobs:
                           assert version == b'RFB 003.008\n'
                           connection.sendall(version)
                           assert stream.read(2) == b'\x01\x02', 'VncAuth must be the only security type'
+                      os.environ['DISPLAY'] = ':' + number.decode('ascii')
+                      before = measure(3)
+                      assert before['hz'] < 2, before
+                      with connect_keeper(rfb, private_password, expected_pid=process.pid):
+                          active = measure(30)
+                          assert active['hz'] >= 45 and active['max_gap_ms'] < 100, active
+                      after = measure(3)
+                      assert after['hz'] < 2, after
+                      print({'present_clock_without_keeper':before,
+                             'present_clock_with_keeper':active,
+                             'present_clock_after_disconnect':after})
               finally:
                   os.close(read_fd)
                   if process.poll() is None:

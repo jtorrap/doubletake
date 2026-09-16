@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 from acceleration import render_nodes
+from rfb_keepalive import start_keeper
 
 
 def _capabilities(environment):
@@ -50,8 +51,9 @@ def _private_vnc_password(path):
     # protected by the worker's private 0700 runtime and their own 0600 modes.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
+        password = secrets.token_urlsafe(6).encode('ascii')
         result = subprocess.run(['tigervncpasswd', '-f'],
-                                input=(secrets.token_urlsafe(6) + '\n').encode('ascii'),
+                                input=password + b'\n',
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 check=True, timeout=5)
         if not isinstance(result.stdout, bytes) or len(result.stdout) != 8:
@@ -59,6 +61,7 @@ def _private_vnc_password(path):
         with os.fdopen(fd, 'wb') as output:
             fd = None
             output.write(result.stdout)
+        return password
     except BaseException:
         Path(path).unlink(missing_ok=True)
         raise
@@ -94,6 +97,8 @@ def _start_xvnc(config, runtime, engine, binary, node):
     os.close(fd)
     cookie = secrets.token_hex(16)
     process = None
+    keeper = None
+    rfb_password = b''
     password_created = False
     read_fd = write_fd = None
 
@@ -104,7 +109,7 @@ def _start_xvnc(config, runtime, engine, binary, node):
                        check=True, timeout=5)
 
     try:
-        _private_vnc_password(password)
+        rfb_password = _private_vnc_password(password)
         password_created = True
         # Xserver accepts the cookie before displayfd chooses the final number.
         # Then add the client-side entry for the allocated private display.
@@ -124,6 +129,11 @@ def _start_xvnc(config, runtime, engine, binary, node):
         display_name = ':' + number.decode('ascii')
         authorize(display_name)
         environment.update(DISPLAY=display_name, XAUTHORITY=str(authority))
+        # Xvnc slows Present/vblank to 1 Hz without an authenticated RFB client.
+        # Keep one idle private client; x11vnc remains the only UI transport.
+        keeper = start_keeper(process, socket_path, rfb_password, engine.stop)
+        rfb_password = b''
+        process._doubletake_rfb_keeper = keeper
         capabilities = _capabilities(environment)
         if node is not None and not capabilities['dri3']:
             raise RuntimeError('xvnc_dri3_unavailable')
@@ -132,6 +142,8 @@ def _start_xvnc(config, runtime, engine, binary, node):
                                       'fallback': None}
     except BaseException:
         # Stop the whole owned display group before permitting an Xvfb retry.
+        if keeper is not None:
+            keeper.close()
         engine.stop(process)
         authority.unlink(missing_ok=True)
         if password_created:
@@ -141,6 +153,7 @@ def _start_xvnc(config, runtime, engine, binary, node):
         raise
     finally:
         cookie = ''
+        rfb_password = b''
         if read_fd is not None:
             os.close(read_fd)
         if write_fd is not None:
