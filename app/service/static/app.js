@@ -109,8 +109,9 @@ function renderReceivers() {
       if (receiver.performance) {
         const performance = document.createElement('p'); performance.className = 'receiver-error';
         const metrics = receiver.performance, stale = receiver.performance_age_seconds > 12;
+        const timing = metrics.source_samples ? `${Math.round(metrics.source_age_mean_ms)} ms capture to send` : 'Capture timing unavailable';
         performance.textContent = stale ? 'Waiting for fresh video measurements…' :
-          `${metrics.sent_fps.toFixed(1)} fps sent · ${receiver.encoder === 'vaapi' ? 'Intel GPU' : 'Software'} · ${Math.round(metrics.source_age_mean_ms)} ms capture to send`;
+          `${metrics.sent_fps.toFixed(1)} fps sent · ${receiver.encoder === 'vaapi' ? 'Intel GPU' : 'Software'} · ${timing}`;
         performance.title = 'Measures encoded frames sent, not frames displayed by the TV.';
         info.append(performance);
       }
@@ -183,10 +184,10 @@ async function connectPreview() {
     $('screen').replaceChildren();
     const connection=new RFB($('screen'),url.href,{credentials:{password:auth.password},shared:true,wsProtocols:['binary','doubletake.'+csrf]});
     rfb=connection; connection.scaleViewport=true; connection.resizeSession=false; connection.showDotCursor=false;
-    connection.addEventListener('connect',()=>{$('previewState').textContent='Connected · Click the browser to type';});
+    connection.addEventListener('connect',()=>{if(rfb===connection&&!previewPaused)$('previewState').textContent='Connected · Click the browser to type';});
     connection.addEventListener('disconnect',()=>{if(rfb===connection){rfb=null;$('previewState').textContent='Preview disconnected · reconnecting';}});
-    connection.addEventListener('securityfailure',()=>{$('previewState').textContent='Preview authentication failed';});
-  } catch { $('previewState').textContent='Connecting to preview…'; }
+    connection.addEventListener('securityfailure',()=>{if(rfb===connection&&!previewPaused)$('previewState').textContent='Preview authentication failed';});
+  } catch { if(!previewPaused)$('previewState').textContent='Connecting to preview…'; }
   finally { connecting=false; }
 }
 function edit(kind,item={}) {

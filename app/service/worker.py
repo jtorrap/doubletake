@@ -113,6 +113,10 @@ class Worker:
         self.media = {}
         self.encoder = None
         self.encoder_fallback = False
+        # Desired connection generations outlive entries being cleaned up.
+        # An explicit Stop must invalidate an automatic retry even after the
+        # old sender was popped from self.senders and while stop() is awaiting.
+        self.sender_generations = {}
         self.native = config.get('control_mode', 'native') == 'native'
 
     def media_event(self, value):
@@ -296,6 +300,14 @@ class Worker:
             process.stdin.close()
             entry['buffer'] = ''
 
+    def invalidate_senders(self, tv_id=None):
+        keys = {tv_id} if tv_id is not None else self.senders.keys() | self.sender_generations.keys()
+        for key in keys:
+            self.sender_generations[key] = self.sender_generations.get(key, 0) + 1
+
+    def sender_desired(self, tv_id, generation):
+        return not self.stop_event.is_set() and self.sender_generations.get(tv_id, 0) == generation
+
     def sender_output(self, tv_id, entry):
         # A queued callback from an old connection must never update its retry.
         if self.senders.get(tv_id) is not entry:
@@ -380,7 +392,7 @@ class Worker:
                     await recovery.wait()
                     self.stop_event.set()
 
-    async def command(self, value):
+    async def command(self, value, *, retry_generation=None):
         action = value["action"]
         if self.native and action in {'navigate', 'back', 'forward', 'reload', 'insert_text'}:
             fields = {'url':value['url']} if action == 'navigate' else {'value':value['value']} if action == 'insert_text' else {}
@@ -407,10 +419,19 @@ class Worker:
         elif action == "cast":
             receiver = value["receiver"]
             tv_id = identifier(receiver['id'])
+            if retry_generation is None:
+                self.invalidate_senders(tv_id)
+            generation = self.sender_generations.get(tv_id, 0) if retry_generation is None else retry_generation
+            if not self.sender_desired(tv_id, generation):
+                return False
             await self.stop_sender(tv_id)
+            if not self.sender_desired(tv_id, generation):
+                return False
             if self.encoder is None:
                 enabled = os.environ.get('DOUBLETAKE_HARDWARE_ENCODING', 'true') == 'true'
                 available = enabled and await asyncio.to_thread(encoding_probe, self.engine_config, self.environment)
+                if not self.sender_desired(tv_id, generation):
+                    return False
                 self.encoder = 'vaapi' if available else 'none'
                 self.encoder_fallback = enabled and not available
             config = {**self.engine_config, "target": receiver["host"], "port": receiver["port"], "state_dir": str(Path(self.config["receivers_dir"]) / receiver["id"]), "pair": False}
@@ -422,10 +443,12 @@ class Worker:
             process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             entry = {'process': process, 'buffer': '', 'state': 'starting',
                      'encoder': config['hwaccel'], 'receiver': receiver,
+                     'generation': generation,
                      'started': time.monotonic(),
                      'audio': 'starting' if self.audio else 'disabled'}
             self.senders[tv_id] = entry
             asyncio.get_running_loop().add_reader(process.stdout.fileno(), self.sender_output, tv_id, entry)
+            return True
         elif action == "pin":
             pin = value["value"]
             entry = self.senders.get(value.get('tv_id'))
@@ -435,8 +458,10 @@ class Worker:
             entry['process'].stdin.flush()
             entry['state'] = 'starting'
         elif action == "stop":
+            self.invalidate_senders(value.get('tv_id'))
             await self.stop_sender(value.get('tv_id'))
         elif action == "close":
+            self.invalidate_senders()
             self.stop_event.set()
         else:
             raise RuntimeError("unknown_command")
@@ -452,18 +477,25 @@ class Worker:
                 return
             for tv_id, entry in list(self.senders.items()):
                 if entry['process'].poll() is not None and self.senders.get(tv_id) is entry:
+                    generation = entry.get('generation', self.sender_generations.get(tv_id, 0))
                     await self.stop_sender(tv_id)
+                    if not self.sender_desired(tv_id, generation):
+                        continue
                     # A successful probe cannot cover every real receiver's
                     # negotiated caps. Retry software once if VAAPI dies during
                     # startup; leave the shared browser and other TVs intact.
                     if tv_id not in self.senders and entry.get('encoder') == 'vaapi' and time.monotonic() - entry['started'] < 20 and not entry.get('performance'):
                         self.encoder_fallback = True
-                        await self.command({'action': 'cast', 'receiver': entry['receiver'], 'software_retry': True})
-                        emit('airplay', tv_id=tv_id, state='starting')
-                        continue
+                        try:
+                            retried = await self.command({'action': 'cast', 'receiver': entry['receiver'], 'software_retry': True}, retry_generation=generation)
+                        except Exception:
+                            retried = False
+                        if retried:
+                            emit('airplay', tv_id=tv_id, state='starting')
+                            continue
                     # Stop/retry can run while process cleanup awaits. Ignore
                     # the old exit if a replacement connection already exists.
-                    if tv_id not in self.senders:
+                    if tv_id not in self.senders and self.sender_desired(tv_id, generation):
                         emit('airplay', tv_id=tv_id, state='error', code='receiver_session_ended')
             await asyncio.sleep(0.25)
 

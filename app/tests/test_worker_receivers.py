@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -201,6 +202,74 @@ class WorkerReceivers(unittest.IsolatedAsyncioTestCase):
             release_cleanup.set()
             self.worker.stop_event.set()
             await monitor
+
+    async def assert_stop_cancels_pending_hardware_fallback(self, stop_all):
+        failed, healthy = self.entry(ONE, returncode=1), self.entry(TWO)
+        self.worker.encoder = 'vaapi'
+        self.worker.sender_generations[ONE] = 1
+        failed.update(encoder='vaapi', generation=1, started=time.monotonic(),
+                      receiver={'id': ONE, 'host': '127.0.0.1', 'port': 7000})
+        loop = asyncio.get_running_loop()
+        cleanup_started, release_cleanup = asyncio.Event(), threading.Event()
+
+        def slow_stop(process):
+            self.stopped.append(process)
+            if process is failed['process']:
+                loop.call_soon_threadsafe(cleanup_started.set)
+                if not release_cleanup.wait(2):
+                    raise RuntimeError('Fixture cleanup release missing')
+            process.returncode = 0
+
+        self.engine.stop = slow_stop
+        with patch.object(worker_module.subprocess, 'Popen') as launch:
+            monitor = asyncio.create_task(self.worker.monitor())
+            try:
+                await asyncio.wait_for(cleanup_started.wait(), 2)
+                # The monitor has already removed ONE; an absent entry still
+                # represents a desired connection until this explicit Stop.
+                self.assertNotIn(ONE, self.worker.senders)
+                await self.worker.command({'action': 'stop', **({} if stop_all else {'tv_id': ONE})})
+                release_cleanup.set()
+                await self.until(lambda: failed['process'].stdout.closed)
+                launch.assert_not_called()
+                self.assertNotIn(ONE, self.worker.senders)
+                self.assertFalse(any(event.get('tv_id') == ONE for event in self.events))
+                if stop_all:
+                    self.assertEqual(self.worker.senders, {})
+                else:
+                    self.assertIs(self.worker.senders[TWO], healthy)
+            finally:
+                release_cleanup.set()
+                self.worker.stop_event.set()
+                await monitor
+
+    async def test_stop_during_failed_encoder_cleanup_prevents_automatic_reconnect(self):
+        await self.assert_stop_cancels_pending_hardware_fallback(False)
+
+    async def test_stop_all_invalidates_removed_sender_awaiting_encoder_fallback(self):
+        await self.assert_stop_cancels_pending_hardware_fallback(True)
+
+    async def test_hardware_start_failure_retries_software_only_once(self):
+        failed, healthy = self.entry(ONE, returncode=1), self.entry(TWO)
+        self.worker.encoder = 'vaapi'
+        self.worker.sender_generations[ONE] = 1
+        failed.update(encoder='vaapi', generation=1, started=time.monotonic(),
+                      receiver={'id': ONE, 'host': '127.0.0.1', 'port': 7000})
+        replacement = self.sender()
+        with patch.object(worker_module.subprocess, 'Popen', return_value=replacement) as launch:
+            monitor = asyncio.create_task(self.worker.monitor())
+            try:
+                await self.until(lambda: self.worker.senders.get(ONE, {}).get('process') is replacement)
+                self.assertEqual(self.engine.sender_command.call_args.args[0]['hwaccel'], 'none')
+                self.assertIs(self.worker.senders[TWO], healthy)
+                replacement.returncode = 1
+                await self.until(lambda: any(event.get('tv_id') == ONE and event['state'] == 'error' for event in self.events))
+                self.assertEqual(launch.call_count, 1)
+                self.assertIs(self.worker.senders[TWO], healthy)
+                self.assertFalse(monitor.done())
+            finally:
+                self.worker.stop_event.set()
+                await monitor
 
 
 if __name__ == '__main__':
