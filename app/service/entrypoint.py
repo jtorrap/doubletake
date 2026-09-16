@@ -7,6 +7,7 @@ import sys
 import urllib.request
 from acceleration import drm_groups
 from latency import target_latency_ms
+from youtube_extension_install import install_extension
 
 
 def supervisor(path, token):
@@ -46,6 +47,7 @@ def main():
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.chmod(0o700)
         os.chown(path, 1000, 1000)
+    install_extension()
     bootstrap = Path("/run/doubletake/bootstrap.json")
     bootstrap.write_text(json.dumps({"port": port, "mqtt": mqtt, "quality": quality}))
     os.chown(bootstrap, 1000, 1000)

@@ -14,6 +14,7 @@ from aiohttp import web, WSMsgType
 from model import Store, VERSION
 from session import Session
 from mqtt_bridge import MQTTBridge
+from youtube import launch as youtube_launch
 
 
 async def discover_tvs():
@@ -164,6 +165,17 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                 # disconnecting a TV. A stale ID must not partially apply.
                 receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
                 await session.cast(page, receivers)
+        elif operation == 'youtube':
+            if set(body) - {'mode', 'url', 'resume', 'tv_ids'}:
+                raise ValueError()
+            intent = youtube_launch(body.get('mode'), url=body.get('url'), resume=body.get('resume', True))
+            receivers = None
+            if 'tv_ids' in body:
+                tv_ids = body['tv_ids']
+                if not isinstance(tv_ids, list) or not tv_ids or any(not isinstance(tv_id, str) for tv_id in tv_ids) or len(tv_ids) != len(set(tv_ids)):
+                    raise ValueError()
+                receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
+            await session.youtube(**intent, receivers=receivers)
         elif operation == "stop":
             tv_id = body.get('tv_id')
             if tv_id is not None:
@@ -244,8 +256,16 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                 # A second TV joins the currently viewed page without
                 # resetting playback or a user's navigation on that page.
                 await session.open(store.get("pages", command.get("page_id")), tv, preserve_view=True)
-            else:
+            elif command['action'] in {'youtube', 'watch_later'}:
+                mode = 'video' if command['action'] == 'youtube' else 'watch_later'
+                intent = youtube_launch(mode, url=command.get('url'), resume=command.get('resume', True))
+                if set(command) - {'action', 'url', 'resume'}:
+                    raise ValueError()
+                await session.youtube(**intent, receivers=[tv], replace_receivers=False)
+            elif command['action'] == 'stop':
                 await session.stop(tv_id)
+            else:
+                raise ValueError()
         except (ValueError, OSError):
             # Connection failures already belong to the affected TV. Keep a
             # healthy peer's browser-level status clear.

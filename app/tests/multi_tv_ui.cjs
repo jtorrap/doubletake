@@ -35,7 +35,15 @@ const outputDir = process.argv[2];
       actions.push({action,body});
       if (action === 'cast') {
         fixture.runtime.page_id = body.page_id;
+        fixture.runtime.youtube = null; fixture.runtime.source_label = null;
         fixture.runtime.receivers = Object.fromEntries(body.tv_ids.map(id => [id,fixture.runtime.receivers[id] || {state:'pairing',error:null,audio:'starting'}]));
+      } else if (action === 'open') {
+        fixture.runtime.page_id = body.page_id; fixture.runtime.youtube = null; fixture.runtime.source_label = null;
+      } else if (action === 'youtube') {
+        fixture.runtime.page_id = null;
+        fixture.runtime.source_label = body.mode === 'watch_later' ? 'Watch Later' : 'YouTube';
+        fixture.runtime.youtube = {mode:body.mode,state:'loading'};
+        if (body.tv_ids) fixture.runtime.receivers = Object.fromEntries(body.tv_ids.map(id => [id,fixture.runtime.receivers[id] || {state:'starting',error:null,audio:'starting'}]));
       } else if (action === 'stop') {
         if (body.tv_id) delete fixture.runtime.receivers[body.tv_id]; else fixture.runtime.receivers = {};
       } else if (action === 'pin') fixture.runtime.receivers[body.tv_id] = {state:'sending',error:null,audio:'active'};
@@ -126,7 +134,66 @@ const outputDir = process.argv[2];
     assert.equal(await page.locator('#pasteValue').getAttribute('type'),'password');
     await page.getByRole('button',{name:'Cancel paste',exact:true}).click();
     assert.equal(await page.locator('#pasteValue').inputValue(),'');
+    // YouTube drafts are independent of polling and the live shared source.
+    fixture.runtime.audio_enabled = true;
+    fixture.runtime.receivers = {cart:{state:'sending',error:null,audio:'active'}};
+    await afterPoll();
+    await page.getByRole('combobox',{name:'Source',exact:true}).selectOption('video');
+    assert.equal(await page.getByRole('button',{name:'Open browser',exact:true}).isDisabled(),true);
+    const videoURL = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+    await page.getByLabel('YouTube video URL',{exact:true}).fill(videoURL);
+    await page.getByRole('checkbox',{name:'Upstairs',exact:true}).check();
+    await page.getByLabel('YouTube video URL',{exact:true}).focus();
+    await afterPoll();
+    assert.equal(await page.locator('#sourceChoice').inputValue(),'video');
+    assert.equal(await page.locator('#youtubeURL').inputValue(),videoURL);
+    assert.equal(await page.evaluate(() => document.activeElement.id),'youtubeURL','Polling stole source input focus');
+    await page.getByRole('button',{name:'Open browser',exact:true}).click();
+    await page.waitForFunction(() => document.querySelector('#youtubeState').textContent === 'YouTube · Loading');
+    assert.deepEqual(actions.at(-1),{action:'youtube',body:{mode:'video',url:videoURL}});
+    assert.deepEqual(Object.keys(fixture.runtime.receivers),['cart'],'Open browser changed receiver set');
+    assert.equal(await page.getByRole('checkbox',{name:'Upstairs',exact:true}).isChecked(),true,'Open lost unsubmitted TV selection');
+    assert.match(await page.locator('#sessionState').innerText(),/Sending to 1 TV/);
+    assert.equal(await page.locator('#youtubeURL').inputValue(),videoURL);
+    for (const [value,label] of [['playing','Playing'],['paused','Paused'],['finished','Finished'],['needs_interaction','Needs interaction'],['error','Needs attention']]) {
+      fixture.runtime.youtube = {mode:'video',state:value,...(value==='needs_interaction'?{error:'Sign in to YouTube in the preview.'}:{})};
+      await afterPoll();
+      assert.equal(await page.locator('#youtubeState').innerText(),`YouTube · ${label}`);
+      assert.match(await page.locator('#sessionState').innerText(),/Sending to 1 TV/,'Playback state replaced sender status');
+      if (value==='needs_interaction') assert.equal(await page.locator('#youtubeDetail').innerText(),'Sign in to YouTube in the preview.');
+    }
+    await page.getByRole('combobox',{name:'Source',exact:true}).selectOption('watch_later');
+    assert.equal(await page.getByRole('checkbox',{name:'Include partly watched videos',exact:true}).isChecked(),true);
+    await page.getByRole('button',{name:'Show on TVs',exact:true}).click();
+    await page.waitForFunction(() => document.querySelector('#sessionDetail').textContent.startsWith('Watch Later'));
+    assert.deepEqual(actions.at(-1),{action:'youtube',body:{mode:'watch_later',resume:true,tv_ids:['cart','upstairs']}});
+    await noOverflow();
+    if (outputDir) await page.screenshot({path:path.join(outputDir,'youtube-watch-later-390.png'),fullPage:true});
+    await page.getByRole('checkbox',{name:'Include partly watched videos',exact:true}).uncheck();
+    await afterPoll();
+    assert.equal(await page.getByRole('checkbox',{name:'Include partly watched videos',exact:true}).isChecked(),false);
+    await page.getByRole('button',{name:'Open browser',exact:true}).click();
+    await page.waitForFunction(() => !document.querySelector('#openBrowser').disabled);
+    assert.deepEqual(actions.at(-1),{action:'youtube',body:{mode:'watch_later',resume:false}});
+    await page.getByRole('combobox',{name:'Source',exact:true}).selectOption('video');
+    assert.equal(await page.locator('#youtubeURL').inputValue(),videoURL,'Source switch cleared URL draft');
+    await page.setViewportSize({width:745,height:1000});
+    await page.getByRole('button',{name:'Show on TVs',exact:true}).click();
+    await page.waitForFunction(() => !document.querySelector('#cast').disabled);
+    assert.deepEqual(actions.at(-1),{action:'youtube',body:{mode:'video',url:videoURL,tv_ids:['cart','upstairs']}});
+    await noOverflow();
+    if (outputDir) await page.screenshot({path:path.join(outputDir,'youtube-video-745.png'),fullPage:true});
+    await page.getByRole('combobox',{name:'Source',exact:true}).selectOption('page');
+    await page.locator('#pageChoice').selectOption('youtube');
+    await page.getByRole('button',{name:'Open browser',exact:true}).click();
+    await page.locator('#youtubeStatus').waitFor({state:'hidden'});
+    assert.deepEqual(actions.at(-1),{action:'open',body:{page_id:'youtube'}});
+    fixture.runtime.page_id = null; fixture.runtime.source_label = 'Watch Later';
+    fixture.runtime.youtube = {mode:'watch_later',state:'playing'};
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#sourceChoice').value === 'watch_later');
+    assert.equal(await page.getByRole('checkbox',{name:'Include partly watched videos',exact:true}).isChecked(),true);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true}));
+    console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true,youtube_drafts_and_focus:true,youtube_payloads:true,youtube_status_separate:true,watch_later_resume_default:true,saved_page_unchanged:true,initial_youtube_source:true}));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

@@ -1,0 +1,24 @@
+/* Fit the ordinary Chrome viewport without requiring Fullscreen API activation. */
+html[data-doubletake-player], html[data-doubletake-player] body {
+  overflow:hidden !important; background:#000 !important;
+}
+/* YouTube's ancestor transforms/containment must not trap a fixed player in
+   the normal watch-page column or underneath a separate stacking context. */
+html[data-doubletake-player] body :has(#movie_player) {
+  position:static !important; overflow:visible !important;
+  transform:none !important; filter:none !important; perspective:none !important;
+  contain:none !important; isolation:auto !important; z-index:auto !important;
+}
+html[data-doubletake-player] #movie_player {
+  position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important;
+  min-width:0 !important; max-width:none !important; max-height:none !important;
+  margin:0 !important; transform:none !important;
+  z-index:2147483640 !important; background:#000 !important;
+}
+html[data-doubletake-player] #movie_player .html5-video-container,
+html[data-doubletake-player] #movie_player video {
+  position:absolute !important; width:100% !important; height:100% !important;
+  left:0 !important; top:0 !important; margin:0 !important;
+  object-fit:contain !important;
+}
+html[data-doubletake-player] #movie_player .ytp-chrome-bottom { width:calc(100% - 24px) !important; }

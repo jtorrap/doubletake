@@ -133,6 +133,8 @@ jobs:
           npm install --prefix /tmp/app-playwright playwright@1.58.2
       - name: Multiple-TV controls and responsive layout
         run: node app/tests/multi_tv_ui.cjs artifacts/app/ui
+      - name: YouTube playback and ordered queue fixtures
+        run: node app/tests/youtube_extension.cjs artifacts/app/youtube
       - name: Native browser, interactive preview and AirPlay transport
         run: python3 -B app/tests/integration.py
       - name: Diagnostic-mode fallback and profile lifecycle

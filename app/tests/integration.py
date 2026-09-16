@@ -128,6 +128,11 @@ def main():
                 except (OSError, RuntimeError):
                     return None
             csrf = fixture.wait_for(ready, 15, 'app API')['csrf']
+            # The production entrypoint installs this before dropping root.
+            # This disposable fixture starts server.py directly, so prepare the
+            # same signed Linux extension before any browser/profile is opened.
+            subprocess.run(['docker', 'exec', '--user', '0:0', 'doubletake-integration',
+                            'python3', '-B', '/opt/browser-app/youtube_extension_install.py'], check=True)
             page = api('/api/settings/pages', {'name': 'Live dashboard', 'url': f'http://127.0.0.1:{server.server_port}/'})
             tv = api('/api/settings/tvs', {'name': 'Test TV', 'host': '127.0.0.1', 'port': receiver_ports[0]})
             tv2 = api('/api/settings/tvs', {'name': 'Second TV', 'host': '127.0.0.1', 'port': receiver_ports[1]})
@@ -136,6 +141,8 @@ def main():
             token = fixture.Fixture.metrics['profileToken']
             assert api('/api/state')['runtime']['tv_id'] is None, 'Open started a sender'
             diagnostics = api('/api/diagnostics', {})
+            fixture.wait_for(lambda: api('/api/diagnostics', {}).get('youtube_controls', {}).get('connected'),
+                             30, 'signed YouTube extension and private native messaging')
             expected_display = {'width':1920, 'height':1080, 'fps':30}
             if CONTROL == 'diagnostic':
                 expected_display.update({
@@ -236,6 +243,8 @@ def main():
             assert fixture.Fixture.metrics['hadProfile'] and fixture.Fixture.metrics['hadCookie']
             assert tuple(fixture.Fixture.metrics[key] for key in ('css_width','css_height','zoom','dark')) == (1920,1080,100,True)
             assert api('/api/diagnostics', {})['display'] == diagnostics['display'], 'Display defaults changed on reopen'
+            fixture.wait_for(lambda: api('/api/diagnostics', {}).get('youtube_controls', {}).get('connected'),
+                             20, 'YouTube extension reconnect after profile reopen')
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'Xvnc', 'x11vnc', 'doubletake', 'pulseaudio']), processes

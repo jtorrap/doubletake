@@ -72,6 +72,8 @@ that a website accepts sign-in. Complete sign-in yourself through the preview.
 Each saved TV appears through MQTT discovery as **TV name Browser**. It has:
 
 - **Show page name** buttons for each saved page.
+- **Play YouTube URL**, a text field: enter a video link to play it on that TV.
+- **Play Watch Later**, which resumes unfinished videos in playlist order.
 - **Stop**, scoped to that TV. Other TVs keep playing.
 - **Status** and **Page** sensors.
 
@@ -89,6 +91,80 @@ check when setting up a dashboard.
 MQTT commands are not retained, and retained commands received after reconnect
 are ignored. A Home Assistant restart republishes discovery and current state
 without starting playback.
+
+## YouTube videos and Watch Later
+
+Choose **YouTube video** in the Source selector, paste a normal YouTube, Shorts,
+live-video or youtu.be link, then choose **Open browser** or **Show on TVs**.
+The video loads, starts playing, and fills the browser display. An explicit link
+start time is retained; tracking and playlist parameters are removed. Open
+browser preserves current TV connections. Show on TVs applies exactly the
+selected set, disconnecting other receivers before opening the new video.
+
+Choose **Watch Later** to use the YouTube account signed in to this browser.
+The app reads the playlist in its displayed order, skips videos whose visible
+watch-progress bar is complete (99% or more), and plays the remaining videos in
+order. **Include partly watched videos** is enabled by default: YouTube resumes
+them using its remembered playback position. Turn it off to skip videos showing
+any watch progress. The app leaves your playlist entries and watch history in
+place; ordinary YouTube playback still updates history normally.
+
+Unavailable videos are skipped. At the end of the queue playback stops. A
+sign-in, consent, age-check or other page requiring interaction is shown as
+**Needs interaction**; complete it through the preview. A playlist without
+usable progress indicators cannot reveal watched state the account no longer
+remembers. This mode depends on YouTube's current page layout. Queues are limited
+to 5,000 items and three minutes of list loading; exceeding either limit reports
+an error instead of silently playing a partial list.
+
+YouTube playback status is separate from each TV's connection status. The page's
+Pause control pauses playback. Opening a saved page, using the navigation
+buttons or closing the browser cancels the managed YouTube queue. Stop all
+disconnects TVs while leaving the browser running. A restart does not resume a
+queue automatically. The existing YouTube quality extension remains independent.
+
+For an automation, use **Text: Set value** with the desired TV's **Play YouTube
+URL** entity. For example (replace the entity ID with the one HA assigned):
+
+```yaml
+action: text.set_value
+target:
+  entity_id: text.upstairs_browser_play_youtube_url
+data:
+  value: "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+For Watch Later use **Button: Press** on that TV's **Play Watch Later** entity.
+Both controls join their TV to the shared browser; a different video changes
+the page on every connected TV. Repeating a launch on a second TV preserves the
+current queue and playback position. The text entity accepts up to 255 characters
+and returns to a blank state; pasted URLs are not stored in the app's settings.
+Home Assistant may retain service-call data in its own automation traces.
+
+The same operation is available through MQTT on
+`doubletake_browser/INSTALLATION_ID/TV_ID/command`, with `retain: false`:
+
+```json
+{"action":"youtube","url":"https://youtu.be/VIDEO_ID"}
+```
+
+```json
+{"action":"watch_later","resume":true}
+```
+
+The Ingress UI uses `POST api/action/youtube` with either
+`{"mode":"video","url":"..."}` or `{"mode":"watch_later","resume":true}`,
+plus optional `tv_ids` for an exact receiver selection. It requires the existing
+Ingress authentication and CSRF protection; it is not a public HTTP endpoint.
+
+The bundled **Doubletake YouTube Playback** companion runs only on
+`https://www.youtube.com`. It uses Chrome's native-messaging interface and a
+private Unix socket; Chrome stays in Standard mode without a debugging port.
+It reads playlist links/progress and controls video elements, and does not read
+cookies or credentials. The player fills the existing fullscreen browser via a
+page style, retaining normal player controls. The companion is installed with
+Chrome's Linux external-extension mechanism and a private per-install signing
+key. Keep the app data when updating so its extension identity is preserved.
 
 ## Quality and resource usage
 
@@ -171,7 +247,8 @@ Docker socket, or host PID namespace is mapped.
 ## Storage, backups, and rollback
 
 All runtime data is in the app's private `/data/doubletake` directory: named
-settings, browser profile, receiver credentials, and owned MQTT discovery topic
+settings, browser profile, receiver credentials, the YouTube companion signing
+key, and owned MQTT discovery topic
 inventory. Never upload that directory or real-browser test artifacts.
 
 Backups use a cold snapshot so the browser profile can close before copying.

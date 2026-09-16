@@ -8,7 +8,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-VERSION = "0.1.11"
+VERSION = "0.1.12"
 ID = re.compile(r"^[a-f0-9]{16}$")
 
 
@@ -162,6 +162,17 @@ def discovery(store, prefix="homeassistant"):
             messages[f"{prefix}/button/{uid}/config"] = {**shared, "unique_id": uid, "name": "Show " + page["name"], "icon": "mdi:cast", "command_topic": f"{base}/{tv['id']}/command", "payload_press": json.dumps({"action": "cast", "page_id": page["id"]}), "retain": False, "qos": 0}
         uid = device_id + "_stop"
         messages[f"{prefix}/button/{uid}/config"] = {**shared, "unique_id": uid, "name": "Stop", "icon": "mdi:stop", "command_topic": f"{base}/{tv['id']}/command", "payload_press": '{"action":"stop"}', "retain": False, "qos": 0}
+        uid = device_id + '_watch_later'
+        messages[f'{prefix}/button/{uid}/config'] = {**shared, 'unique_id': uid, 'name': 'Play Watch Later', 'icon': 'mdi:youtube',
+            'command_topic': f"{base}/{tv['id']}/command", 'payload_press': '{"action":"watch_later","resume":true}', 'retain': False, 'qos': 0}
+        uid = device_id + '_youtube_url'
+        # With no state topic HA forces optimistic mode and remembers the URL.
+        # A blank state template keeps this launch field empty; only the
+        # non-retained command carries the user's link. MQTT text max is 255.
+        messages[f'{prefix}/text/{uid}/config'] = {**shared, 'unique_id': uid, 'name': 'Play YouTube URL', 'icon': 'mdi:youtube',
+            'command_topic': f"{base}/{tv['id']}/command", 'command_template': '{{ {"action": "youtube", "url": value} | tojson }}',
+            'state_topic': f"{base}/{tv['id']}/state", 'value_template': "{{ '' }}", 'optimistic': False,
+            'min': 0, 'max': 255, 'mode': 'text', 'retain': False, 'qos': 0}
         for key, label, icon in [("state", "Status", "mdi:cast"), ("page", "Page", "mdi:web")]:
             uid = device_id + "_" + key
             messages[f"{prefix}/sensor/{uid}/config"] = {**shared, "unique_id": uid, "name": label, "icon": icon, "state_topic": f"{base}/{tv['id']}/state", "value_template": "{{ value_json." + key + " }}"}

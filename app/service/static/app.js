@@ -4,11 +4,21 @@ const $ = id => document.getElementById(id);
 let state = null, csrf = '', busy = false, rfb = null, connecting = false;
 let editing = null, removing = null, pairingTV = null;
 let previewPaused = false;
+let sourceInitialized = false;
 let selectedTVs = new Set(), selectionDirty = false, pageSelectionDirty = false;
 let tvChoicesSignature = '', receiversSignature = '';
 const labels = {closed:'Browser closed', starting:'Starting browser', ready:'Browser ready', error:'Needs attention'};
 const receiverLabels = {starting:'Connecting', pairing:'Pairing required', sending:'Sending', error:'Needs attention'};
 const audioLabels = {starting:'Audio starting',active:'Audio active',unavailable:'Audio unavailable',error:'Audio failed',disabled:'Audio off'};
+const youtubeLabels = {loading:'Loading',playing:'Playing',paused:'Paused',finished:'Finished',needs_interaction:'Needs interaction',error:'Needs attention'};
+const youtubeDetails = {
+  loading:'Opening YouTube in the shared browser…',
+  playing:'Playback is running in the shared browser. TV connections are shown separately.',
+  paused:'Playback is paused. Use the preview to continue.',
+  finished:'Playback finished.',
+  needs_interaction:'Check the preview for a sign-in or playback choice. Resume the preview if it is paused.',
+  error:'YouTube could not start. Check the preview and try again.',
+};
 
 function receivers() { return state?.runtime.receivers || {}; }
 function tvName(id) { return state?.tvs.find(item => item.id === id)?.name || 'TV'; }
@@ -37,9 +47,16 @@ function options(select, values, empty) {
 }
 function controls() {
   const ready = state?.runtime.browser === 'ready';
+  const source = $('sourceChoice').value;
+  const canOpen = source === 'page' ? !!$('pageChoice').value : source === 'video' ? !!$('youtubeURL').value.trim() : source === 'watch_later';
+  $('savedPageField').hidden = source !== 'page';
+  $('youtubeURLField').hidden = source !== 'video';
+  $('watchLaterOptions').hidden = source !== 'watch_later';
+  $('youtubeURL').required = source === 'video';
+  $('sourceChoice').disabled = $('youtubeURL').disabled = $('youtubeResume').disabled = busy;
   $('pageChoice').disabled = busy;
-  $('openBrowser').disabled = busy || !$('pageChoice').value;
-  $('cast').disabled = busy || !$('pageChoice').value || !selectedTVs.size;
+  $('openBrowser').disabled = busy || !canOpen;
+  $('cast').disabled = busy || !canOpen || !selectedTVs.size;
   $('stop').disabled = busy || !Object.keys(receivers()).length;
   $('closeBrowser').disabled = busy || !ready;
   $('fullscreen').disabled = !ready;
@@ -54,6 +71,35 @@ function controls() {
   $('selectionHint').textContent = changed && Object.keys(receivers()).length ?
     `Selection changed. Show on TVs applies this set and disconnects unchecked TVs. ${shared}` :
     `${shared} Apply your selection with Show on TVs.`;
+}
+function renderYouTubeStatus(current) {
+  const youtube = current.youtube;
+  $('youtubeStatus').hidden = !youtube || current.browser === 'closed';
+  if (!youtube) return;
+  const label = `YouTube · ${youtubeLabels[youtube.state] || 'Status unavailable'}`;
+  const detail = youtube.error || youtubeDetails[youtube.state] || 'Check the browser preview for playback status.';
+  if ($('youtubeState').textContent !== label) $('youtubeState').textContent = label;
+  if ($('youtubeDetail').textContent !== detail) $('youtubeDetail').textContent = detail;
+  $('youtubeState').className = `badge ${youtube.state === 'playing' ? 'good' : youtube.state === 'error' ? 'bad' : ['loading','needs_interaction'].includes(youtube.state) ? 'wait' : ''}`;
+}
+function launchSource(onTVs) {
+  if (busy) return;
+  const mode = $('sourceChoice').value;
+  let path, body;
+  if (mode === 'page') {
+    path = onTVs ? 'api/action/cast' : 'api/action/open';
+    body = {page_id:$('pageChoice').value};
+  } else {
+    if (mode === 'video' && !$('youtubeURL').reportValidity()) return;
+    path = 'api/action/youtube';
+    body = mode === 'video' ? {mode,url:$('youtubeURL').value.trim()} : {mode,resume:$('youtubeResume').checked};
+  }
+  if (onTVs) body.tv_ids = [...selectedTVs];
+  run(async () => {
+    await api(path,body);
+    if (onTVs) selectionDirty = false;
+    pageSelectionDirty = false;
+  });
 }
 function renderTVChoices() {
   const signature = JSON.stringify(state.tvs.map(({id,name}) => [id,name]));
@@ -148,6 +194,10 @@ function renderItems(kind) {
 }
 async function refresh() {
   state = await api('api/state', undefined, 'GET'); csrf = state.csrf;
+  if (!sourceInitialized) {
+    sourceInitialized = true;
+    if (['video','watch_later'].includes(state.runtime.youtube?.mode)) $('sourceChoice').value = state.runtime.youtube.mode;
+  }
   options($('pageChoice'),state.pages,'Add a page below');
   if (!pageSelectionDirty && state.pages.some(item => item.id === state.runtime.page_id)) $('pageChoice').value = state.runtime.page_id;
   selectedTVs = new Set([...selectedTVs].filter(id => state.tvs.some(tv => tv.id === id)));
@@ -162,12 +212,14 @@ async function refresh() {
   $('mqttState').textContent = state.mqtt_connected?'Home Assistant connected':'Home Assistant controls reconnecting';
   $('mqttState').className = `badge ${state.mqtt_connected?'good':'wait'}`;
   const current=state.runtime, page=state.pages.find(item=>item.id===current.page_id), active=Object.entries(receivers());
+  const sourceLabel=current.source_label || page?.name || (current.youtube?.mode==='watch_later'?'Watch Later':current.youtube?'YouTube':'');
   const sending=active.filter(([,receiver])=>receiver.state==='sending').length;
   const attention=active.some(([,receiver])=>['pairing','error'].includes(receiver.state)||['unavailable','error'].includes(receiver.audio));
   $('sessionState').textContent=sending?`Sending to ${sending} ${sending===1?'TV':'TVs'}`:attention?'TVs need attention':active.length?'Connecting to TVs':labels[current.browser];
   $('sessionState').className=`badge ${attention?'wait':sending?'good':''}`;
-  $('sessionDetail').textContent=current.error || (page?`${page.name}${active.length?' → '+active.map(([id])=>tvName(id)).join(', '):''}`:'Open a page to sign in, click around, or start a TV view.');
-  $('previewLabel').textContent=page?.name||'Browser preview';
+  $('sessionDetail').textContent=current.error || (sourceLabel?`${sourceLabel}${active.length?' → '+active.map(([id])=>tvName(id)).join(', '):''}`:'Open a page to sign in, click around, or start a TV view.');
+  $('previewLabel').textContent=sourceLabel||'Browser preview';
+  renderYouTubeStatus(current);
   $('previewEmpty').hidden=current.browser==='ready';
   if (current.browser==='ready' && !previewPaused && !rfb && !connecting) connectPreview();
   if (current.browser!=='ready' && rfb) { rfb.disconnect(); rfb=null; $('screen').replaceChildren(); }
@@ -208,16 +260,18 @@ $('editForm').addEventListener('submit',async event=>{
   event.preventDefault(); const {kind,id}=editing;
   const item={name:$('itemName').value,...(kind==='pages'?{url:$('itemURL').value}:{host:$('itemHost').value,port:Number($('itemPort').value)})};
   try{const saved=await api(`api/settings/${kind}${id?'/'+id:''}`,item,id?'PUT':'POST'); $('editor').close();await refresh();
-    if(kind==='pages'){$('pageChoice').value=saved.id;pageSelectionDirty=true;}
+    if(kind==='pages'){$('pageChoice').value=saved.id;pageSelectionDirty=true;$('sourceChoice').value='page';sourceInitialized=true;}
     else if(!id){selectedTVs.add(saved.id);selectionDirty=true;renderTVChoices();}
     controls();}
   catch(error){$('editorError').textContent=error.message;}
 });
 $('cancelEdit').onclick=()=>$('editor').close();
 $('addPage').onclick=()=>edit('pages'); $('addTV').onclick=()=>edit('tvs');
+$('sourceChoice').onchange=()=>{sourceInitialized=true;controls();};
+$('youtubeURL').oninput=controls;
 $('pageChoice').onchange=()=>{pageSelectionDirty=true;controls();};
-$('openBrowser').onclick=()=>run(async()=>{await api('api/action/open',{page_id:$('pageChoice').value});pageSelectionDirty=false;});
-$('cast').onclick=()=>run(async()=>{await api('api/action/cast',{page_id:$('pageChoice').value,tv_ids:[...selectedTVs]});selectionDirty=false;pageSelectionDirty=false;});
+$('openBrowser').onclick=()=>launchSource(false);
+$('cast').onclick=()=>launchSource(true);
 $('stop').onclick=()=>run(async()=>{await api('api/action/stop',{});selectedTVs.clear();selectionDirty=false;});
 $('closeBrowser').onclick=()=>run(async()=>{await api('api/action/close',{});selectedTVs.clear();selectionDirty=false;});
 document.querySelectorAll('[data-browser]').forEach(button=>button.onclick=()=>run(()=>api('api/action/browser',{action:button.dataset.browser})));

@@ -9,6 +9,7 @@ import sys
 import time
 from model import atomic_json, browser_text
 from performance import video_stats, audio_stats
+from youtube import launch as youtube_launch, WATCH_LATER_URL
 
 
 def worker_environment():
@@ -32,13 +33,29 @@ class Session:
         if self.control_mode not in {'native', 'diagnostic'}:
             raise ValueError('Unknown browser control mode')
         self.audio_enabled = os.environ.get('DOUBLETAKE_AUDIO', 'true') == 'true'
-        self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "receivers": {}, "error": None}
+        self.youtube_identity = None
+        self.youtube_sequence = 0
+        self.youtube_launch_id = None
+        self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "receivers": {}, "error": None,
+                        'source_label': None, 'youtube': None}
 
     def state(self):
         return {**self.runtime, 'receivers': {key: {**value, 'performance_age_seconds': round(time.monotonic() - value.get('performance_at', time.monotonic()), 1)} for key, value in self.runtime['receivers'].items()},
                 'control_mode': self.control_mode,
                 'display': {key: self.quality.get(key, default) for key, default in [('width', 1920), ('height', 1080), ('fps', 30)]},
                 'audio_enabled': self.audio_enabled}
+
+    def youtube_event(self, value):
+        current = self.runtime['youtube']
+        if not current or self.youtube_launch_id is None or type(value.get('launch_id')) is not int or value['launch_id'] != self.youtube_launch_id or value.get('mode') != current['mode']:
+            return
+        state = value.get('state')
+        if state not in {'loading', 'playing', 'paused', 'finished', 'needs_interaction', 'error'}:
+            return
+        status = {'mode': current['mode'], 'state': state}
+        if state == 'error':
+            status['error'] = 'YouTube playback could not continue. Open the preview to check the page.'
+        self.update(youtube=status)
 
     def update(self, **fields):
         self.runtime.update(fields)
@@ -99,6 +116,8 @@ class Session:
                     self.receiver_event(value)
                 elif value.get('type') == 'audio':
                     self.audio_event(value)
+                elif value.get('type') == 'youtube':
+                    self.youtube_event(value)
                 elif value.get('type') == 'performance':
                     stats = video_stats(value.get('data'))
                     receiver = self.runtime['receivers'].get(value.get('tv_id'))
@@ -185,10 +204,60 @@ class Session:
 
     async def open_page(self, page, *, preserve_view):
         """Open the one shared page; caller holds the session lock."""
+        await self.cancel_youtube()
         created = await self.ensure(page)
         if not created and not (preserve_view and self.runtime['page_id'] == page['id']):
             await self.request('navigate', url=page['url'])
-        self.update(page_id=page['id'], error=None)
+        self.update(page_id=page['id'], source_label=page.get('name'), error=None)
+
+    async def cancel_youtube(self):
+        """Invalidate pending playback events before issuing normal navigation."""
+        active = self.youtube_launch_id is not None
+        self.youtube_launch_id = self.youtube_identity = None
+        if self.runtime['youtube'] is not None:
+            self.update(youtube=None, source_label=None)
+        if active and self.process and self.process.returncode is None:
+            await self.request('youtube_cancel')
+
+    async def youtube(self, mode, *, url=None, resume=True, receivers=None, replace_receivers=True):
+        intent = youtube_launch(mode, url=url, resume=resume)
+        if receivers is not None and not receivers:
+            raise ValueError('Select at least one TV or omit the selection')
+        identity = (intent['mode'], intent.get('url'), intent['resume'])
+        async with self.lock:
+            if receivers is not None and replace_receivers:
+                desired = {receiver['id'] for receiver in receivers}
+                # An unselected TV must never briefly show the new source.
+                for tv_id in list(self.runtime['receivers']):
+                    if tv_id not in desired:
+                        await self.stop_receiver(tv_id)
+            page = {'id': None, 'url': intent.get('url', WATCH_LATER_URL)}
+            created = await self.ensure(page)
+            current = self.runtime['youtube'] or {}
+            preserved_states = {'loading', 'playing'} | ({'paused'} if not replace_receivers else set())
+            if created or identity != self.youtube_identity or current.get('state') not in preserved_states:
+                await self.cancel_youtube()
+                self.youtube_sequence += 1
+                self.youtube_launch_id = self.youtube_sequence
+                self.youtube_identity = identity
+                self.update(page_id=None, source_label='Watch Later' if mode == 'watch_later' else 'YouTube',
+                            youtube={'mode': mode, 'state': 'loading'}, error=None)
+                try:
+                    result = await self.request('youtube', **intent, launch_id=self.youtube_launch_id)
+                    if isinstance(result, dict):
+                        if result.get('state') != 'loading' or self.runtime['youtube']['state'] == 'loading':
+                            self.youtube_event({**result, 'launch_id': self.youtube_launch_id, 'mode': mode})
+                except (ValueError, OSError):
+                    self.youtube_event({'launch_id': self.youtube_launch_id, 'mode': mode, 'state': 'error'})
+                    raise
+            failed = False
+            for receiver in receivers or []:
+                try:
+                    await self.add_receiver(receiver)
+                except (ValueError, OSError):
+                    failed = True
+            if failed:
+                raise ValueError('One or more TVs could not connect')
 
     async def add_receiver(self, receiver):
         """Add or retry a receiver without interrupting its peers."""
@@ -206,11 +275,11 @@ class Session:
     async def cast(self, page, receivers):
         """Reconcile the UI's explicit selection against connected TVs."""
         async with self.lock:
-            await self.open_page(page, preserve_view=True)
             desired = {receiver['id'] for receiver in receivers}
             for tv_id in list(self.runtime['receivers']):
                 if tv_id not in desired:
                     await self.stop_receiver(tv_id)
+            await self.open_page(page, preserve_view=True)
             # Attempt every selected TV even when one connection fails.
             failed = False
             for receiver in receivers:
@@ -235,6 +304,7 @@ class Session:
 
     async def browser_action(self, action):
         async with self.lock:
+            await self.cancel_youtube()
             await self.request(action)
 
     async def insert_text(self, value):
@@ -278,5 +348,7 @@ class Session:
 
     async def close(self):
         async with self.lock:
+            with contextlib.suppress(ValueError, OSError):
+                await self.cancel_youtube()
             await self.close_worker()
-            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, receivers={}, error=None)
+            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, receivers={}, error=None, source_label=None, youtube=None)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.12
+
+- Play a pasted YouTube video URL with automatic playback and a full-window player.
+- Play Watch Later in playlist order, skip completed videos, and resume partial videos.
+- Expose both launch modes through per-TV Home Assistant controls and MQTT commands.
+- Keep normal Chrome sign-in with a private, YouTube-only playback companion.
+
 ## 0.1.11
 
 - Set the default browser zoom to 100%, retaining per-site overrides and dark mode.

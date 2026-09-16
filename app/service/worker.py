@@ -28,6 +28,7 @@ from browser_preferences import prepare_profile
 from native_control import browser_command as native_browser_command
 from native_control import accessibility_address
 from display import start_display
+from youtube_bridge import YouTubeBridge
 
 
 def load_engine():
@@ -104,6 +105,7 @@ class Worker:
         self.browser = self.display = self.vnc = None
         self.senders = {}
         self.audio = None
+        self.youtube = None
         self.bus = None
         self.command_fd = self.response_fd = None
         self.cdp = None
@@ -190,6 +192,7 @@ class Worker:
                 'audio_enabled': self.audio is not None,
                 'audio': audio_info,
                 'receiver_count': len(self.senders),
+                'youtube_controls': {'connected': bool(self.youtube and self.youtube.connected.is_set())},
                 'cpu_percent_of_one_core': cpu,
                 'video_encoder': self.encoder or 'not_started',
                 'encoder_fallback': self.encoder_fallback,
@@ -236,6 +239,8 @@ class Worker:
         bootstrap = Path(runtime) / "launch.html"
         bootstrap.write_text('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=' + html.escape(self.config["url"], quote=True) + '">')
         self.stage = "browser"
+        self.youtube = YouTubeBridge(lambda value: emit('youtube', **value))
+        self.environment['DOUBLETAKE_YOUTUBE_SOCKET'] = await self.youtube.start(self.environment['XDG_RUNTIME_DIR'])
         prepare_profile(Path(self.config['profile_dir']) / 'profile')
         if self.native:
             self.browser = subprocess.Popen(native_browser_command(self.engine, self.engine_config, bootstrap),
@@ -413,6 +418,15 @@ class Worker:
 
     async def command(self, value, *, retry_generation=None):
         action = value["action"]
+        if action == 'youtube':
+            if not self.youtube:
+                raise ValueError('YouTube control is unavailable')
+            return await self.youtube.play(value.get('mode'), launch_id=value.get('launch_id'),
+                                           url=value.get('url'), resume=value.get('resume', True))
+        if action == 'youtube_cancel':
+            if self.youtube:
+                await self.youtube.cancel()
+            return
         if self.native and action in {'navigate', 'back', 'forward', 'reload', 'insert_text'}:
             fields = {'url':value['url']} if action == 'navigate' else {'value':value['value']} if action == 'insert_text' else {}
             return await self.native_command(action, **fields)
@@ -547,6 +561,8 @@ class Worker:
                 value.clear()
 
     async def close(self):
+        if self.youtube:
+            await self.youtube.close()
         await self.stop_sender()
         if self.native and self.browser and self.browser.poll() is None and self.window:
             with contextlib.suppress(Exception):

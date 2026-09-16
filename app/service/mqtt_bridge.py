@@ -47,14 +47,14 @@ class MQTTBridge:
             self.loop.call_soon_threadsafe(self.refresh)
             return
         # Retained commands must never take over a TV after restart.
-        if message.retain or len(message.payload) > 1024:
+        if message.retain or len(message.payload) > 8192:
             return
         parts = message.topic.split("/")
         if len(parts) != 4 or "/".join(parts[:2]) != self.base or parts[3] != "command":
             return
         try:
             command = json.loads(message.payload)
-            if not isinstance(command, dict) or command.get("action") not in {"cast", "stop"}:
+            if not isinstance(command, dict) or command.get("action") not in {"cast", "stop", "youtube", "watch_later"}:
                 return
         except (ValueError, TypeError):
             return
@@ -82,7 +82,7 @@ class MQTTBridge:
             receiver = runtime.get('receivers', {}).get(tv['id'])
             active = receiver is not None
             state = receiver['state'] if active else 'idle'
-            page = pages.get(runtime.get("page_id"), "None") if active else "None"
+            page = (runtime.get('source_label') or pages.get(runtime.get("page_id"), "None")) if active else "None"
             self.client.publish(f"{self.base}/{tv['id']}/state", json.dumps({"state": state, "page": page}), qos=1, retain=True)
 
     async def stop(self):
