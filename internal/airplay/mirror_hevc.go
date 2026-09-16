@@ -164,7 +164,7 @@ func hevcCodecConfigNeedsSend(primed bool, current, sent [3][]byte) bool {
 	return !primed || !bytes.Equal(current[0], sent[0]) || !bytes.Equal(current[1], sent[1]) || !bytes.Equal(current[2], sent[2])
 }
 
-func (s *MirrorSession) streamHEVCFrames(ctx context.Context, capture *ScreenCapture, startDelay time.Duration) error {
+func (s *MirrorSession) streamHEVCFrames(ctx context.Context, capture *ScreenCapture, startDelay time.Duration, stats *videoStats) error {
 	if capture == nil || capture.frames == nil {
 		return fmt.Errorf("HEVC requires timestamped access-unit capture")
 	}
@@ -251,9 +251,11 @@ func (s *MirrorSession) streamHEVCFrames(ctx context.Context, capture *ScreenCap
 		if s.streamCipher != nil {
 			frame = s.streamCipher(frame)
 		}
-		if err := s.sendFrame(frame, keyframe, timestamp, timeline); err != nil {
+		writeDuration, err := s.sendFrameWithTiming(frame, keyframe, timestamp, timeline)
+		if err != nil {
 			return fmt.Errorf("send HEVC frame: %w", err)
 		}
+		stats.record(unit.PTS, time.Now(), writeDuration)
 		if frameCount == 0 {
 			select {
 			case <-s.firstFrameSent:

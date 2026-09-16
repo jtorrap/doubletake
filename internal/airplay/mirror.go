@@ -1153,8 +1153,14 @@ func addFairPlayRootFields(request map[string]interface{}, ekey, eiv []byte, inc
 //   - IDR VCL: sent encrypted, header[4]=0x00 header[5]=0x00, AVCC payload
 //   - non-IDR VCL: sent encrypted, header[4]=0x00 header[5]=0x00, AVCC payload
 func (s *MirrorSession) StreamFrames(ctx context.Context, capture *ScreenCapture, startDelay time.Duration) error {
+	lead := s.timestampBias
+	if lead <= 0 {
+		lead = videoTimestampBias()
+	}
+	stats, stopStats := startVideoStats(ctx, string(s.videoCodec), lead)
+	defer stopStats()
 	if normalizeVideoCodec(s.videoCodec) == VideoCodecHEVC {
-		return s.streamHEVCFrames(ctx, capture, startDelay)
+		return s.streamHEVCFrames(ctx, capture, startDelay, stats)
 	}
 	if startDelay > 0 {
 		dbg("[STREAM] waiting %v before sending first frame...", startDelay)
@@ -1258,9 +1264,11 @@ func (s *MirrorSession) StreamFrames(ctx context.Context, capture *ScreenCapture
 		nalLog.Reset()
 
 		sentPTS := vclPTS
-		if err := s.sendFrame(frameData, pendingKeyframe, packetTimestamp, packetTimeline); err != nil {
+		writeDuration, err := s.sendFrameWithTiming(frameData, pendingKeyframe, packetTimestamp, packetTimeline)
+		if err != nil {
 			return fmt.Errorf("send %s: %w", keyframeStr, err)
 		}
+		stats.record(sentPTS, time.Now(), writeDuration)
 		// Codec configuration alone is not a displayed picture. Start audio and
 		// data heartbeats only after the receiver has a successfully written VCL
 		// frame to present against the shared media clock.
@@ -1844,6 +1852,13 @@ func (s *MirrorSession) sendCodecFrame(payload []byte, ntpTimestamp uint64, code
 //	[8:16]  NTP network time (LE seconds.32-bit-fraction)
 //	[40:48] timeline ID (zero for NTP, receiver ClockID for PTP)
 func (s *MirrorSession) sendFrame(auData []byte, isKeyframe bool, networkTimestamp, timelineID uint64) error {
+	_, err := s.sendFrameWithTiming(auData, isKeyframe, networkTimestamp, timelineID)
+	return err
+}
+
+// sendFrameWithTiming measures local write/mutex wait only, independently of
+// encryption and capture. It exposes no payload or authentication material.
+func (s *MirrorSession) sendFrameWithTiming(auData []byte, isKeyframe bool, networkTimestamp, timelineID uint64) (time.Duration, error) {
 	s.frameSeq++
 
 	// For ChaCha20-Poly1305, the header size includes the 16-byte Poly1305 tag.
@@ -1919,7 +1934,7 @@ func (s *MirrorSession) sendFrame(auData []byte, isKeyframe bool, networkTimesta
 	} else if reportSlowWrite {
 		dbg("[SEND] video frame seq=%d spent %v waiting for/local-writing to the TCP socket", s.frameSeq, writeEnded.Sub(writeStarted))
 	}
-	return err
+	return writeEnded.Sub(writeStarted), err
 }
 
 // writeAll handles short writes from an io.Writer.
