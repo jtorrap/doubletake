@@ -7,6 +7,19 @@ const fs = require('fs');
   const page = await browser.newPage({viewport: {width: 1440, height: 1100}});
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  async function waitForRemoteSubmit(expected) {
+    const deadline = Date.now() + 10000;
+    let observed;
+    while (Date.now() < deadline) {
+      observed = await (await page.request.get(process.argv[4] + '/input-status')).json();
+      if (observed.clicked && observed.typed === expected) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    // This fixture contains only the explicit synthetic string below. Never
+    // collect input values like this from a real browser or user profile.
+    fs.writeFileSync(process.argv[3] + '/input-failure.json', JSON.stringify(observed, null, 2));
+    throw Error('Remote mouse submit did not acknowledge the exact Unicode text');
+  }
   try {
     // Reproduce a proxy retaining old unversioned assets, including queries.
     // Updated HTML must request a different path and still open the dialog.
@@ -16,10 +29,16 @@ const fs = require('fs');
     await page.goto(process.argv[2]);
     await page.waitForFunction(() => document.querySelector('#previewState').textContent.startsWith('Connected'), {timeout: 30000});
     const canvas = page.locator('#screen canvas');
-    await canvas.scrollIntoViewIfNeeded();
-    const box = await canvas.boundingBox();
-    // Remote page coordinates include its actual 120% browser zoom.
-    await page.mouse.click(box.x + box.width * (180*1.2)/1920, box.y + box.height * (570*1.2)/1080);
+    async function clickRemote(x, y) {
+      // Focus can scroll noVNC's canvas. Complete it before measuring the
+      // freshly scaled rectangle and sending a real down/up pointer pair.
+      await canvas.focus();
+      await canvas.scrollIntoViewIfNeeded();
+      const box = await canvas.boundingBox();
+      // Remote page coordinates include its actual 120% browser zoom.
+      await page.mouse.click(box.x + box.width * (x*1.2)/1920, box.y + box.height * (y*1.2)/1080, {delay:60});
+    }
+    await clickRemote(180, 570);
     await page.keyboard.type('keyboard works');
     // Exercise an actual paste into the app's masked dialog, followed by
     // Unicode insertion into the focused field in the separate app browser.
@@ -35,9 +54,8 @@ const fs = require('fs');
     await page.getByRole('button', {name:'Send text', exact:true}).click();
     await page.waitForFunction(() => !document.querySelector('#pasteDialog').open);
     if (await page.locator('#pasteValue').inputValue() !== '') throw Error('Paste dialog retained text');
-    await canvas.scrollIntoViewIfNeeded();
-    const afterPaste = await canvas.boundingBox();
-    await page.mouse.click(afterPaste.x + afterPaste.width * (140*1.2)/1920, afterPaste.y + afterPaste.height * (637*1.2)/1080);
+    await clickRemote(140, 637);
+    await waitForRemoteSubmit('keyboard works' + secret);
     await page.getByRole('button', {name:'Paste', exact:true}).click();
     await input.fill('cancelled fixture');
     await page.getByRole('button', {name:'Cancel paste', exact:true}).click();

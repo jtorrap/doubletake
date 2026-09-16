@@ -43,6 +43,19 @@ class Fixture(fixture.Fixture):
     clicked = False
     typed = ''
 
+    def do_GET(self):
+        if self.path == '/input-status':
+            # Synthetic fixture only: acknowledge actual remote input before
+            # the preview client changes focus or closes its VNC connection.
+            body = json.dumps({'clicked': Fixture.clicked, 'typed': Fixture.typed}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            super().do_GET()
+
     def do_POST(self):
         if self.path == '/input':
             value = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
@@ -116,7 +129,7 @@ def main():
             if CONTROL == 'native':
                 boundary_checks = json.loads(subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/native_runtime.py'], text=True))
                 (ARTIFACTS/'native-runtime.json').write_text(json.dumps(boundary_checks,indent=2))
-            subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS)], check=True, timeout=60)
+            subprocess.run(['node', str(ROOT / 'app/tests/preview.cjs'), BASE, str(ARTIFACTS), f'http://127.0.0.1:{server.server_port}'], check=True, timeout=60)
             fixture.wait_for(lambda: Fixture.clicked and Fixture.typed == 'keyboard worksP@ss "quotes" \\ $ & <tag> café 🔑', 10, 'Unicode password paste and VNC mouse')
             ids = [tv['id'], tv2['id']]
             api('/api/action/cast', {'page_id': page['id'], 'tv_ids': ids})
