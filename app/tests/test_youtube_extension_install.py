@@ -10,9 +10,9 @@ import tempfile
 import unittest
 import zipfile
 
-from Crypto.Hash import SHA256
-from Crypto.PublicKey import RSA
-from Crypto.Signature import pkcs1_15
+from Cryptodome.Hash import SHA256
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Signature import pkcs1_15
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 import youtube_extension_install as installer
