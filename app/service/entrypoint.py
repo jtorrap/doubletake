@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import urllib.request
 from acceleration import drm_groups
+from latency import target_latency_ms
 
 
 def supervisor(path, token):
@@ -58,6 +59,7 @@ def main():
                 DOUBLETAKE_AUDIO="true" if options.get("audio", True) else "false",
                 DOUBLETAKE_HARDWARE_ENCODING="true" if options.get("hardware_encoding", True) else "false",
                 DOUBLETAKE_DISPLAY_BACKEND=options.get('display_backend', 'auto'),
+                DOUBLETAKE_TARGET_LATENCY_MS=str(target_latency_ms(options.get('target_latency_ms', 0))),
                 DOUBLETAKE_HARDWARE_DECODING="true" if options.get("hardware_decoding", True) else "false")
     os.environ.clear()
     os.environ.update(keep)

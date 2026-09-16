@@ -98,15 +98,21 @@ def _playback_status(environment):
         if len(sinks) != 1:
             return {'status': 'unavailable'}
         sink = sinks[0]
-        if type(sink.get('index')) is not int or type(sink.get('monitor_source')) is not int:
+        if type(sink.get('index')) is not int or sink.get('monitor_source') != SINK + '.monitor':
             return {'status': 'unavailable'}
+        # pactl identifies a sink's monitor by name, but capture streams refer
+        # to it by source index. Resolve only our exact private monitor name.
+        sources = [item for item in query('sources') if item.get('name') == SINK + '.monitor']
+        if len(sources) != 1 or type(sources[0].get('index')) is not int:
+            return {'status': 'unavailable'}
+        monitor_index = sources[0]['index']
         inputs = [item for item in query('sink-inputs')
                   if item.get('sink') == sink['index']
                   and isinstance(item.get('properties'), dict)
                   and item['properties'].get('application.process.binary')
                   in {'chrome', 'google-chrome', 'chromium'}]
         outputs = [item for item in query('source-outputs')
-                   if item.get('source') == sink['monitor_source']]
+                   if item.get('source') == monitor_index]
         volumes = [item.get('value') for item in sink.get('volume', {}).values()
                    if isinstance(item, dict) and type(item.get('value')) is int
                    and 0 <= item['value'] <= 0xffffffff]

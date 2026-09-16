@@ -181,10 +181,12 @@ class BrowserAudioTests(unittest.TestCase):
         secret = 'private media title, URL, profile and credentials'
         properties = {'application.process.binary': 'chrome', 'media.name': secret}
         datasets = [
-            [{'name': 'host-device', 'index': 9, 'monitor_source': 19, 'description': secret},
-             {'name': SINK, 'index': 1, 'monitor_source': 11, 'mute': True,
+            [{'name': 'host-device', 'index': 9, 'monitor_source': 'host-device.monitor', 'description': secret},
+             {'name': SINK, 'index': 1, 'monitor_source': SINK + '.monitor', 'mute': True,
               'volume': {'front-left': {'value': 32768}, 'front-right': {'value': 65536}},
               'properties': {'private': secret}}],
+            [{'name': SINK + '.monitor', 'index': 11, 'properties': {'private': secret}},
+             {'name': 'host-device.monitor', 'index': 19}],
             [{'sink': 1, 'mute': False, 'corked': False, 'properties': properties},
              {'sink': 1, 'mute': True, 'corked': True, 'properties': properties},
              {'sink': 1, 'mute': False, 'corked': False, 'properties': {'application.process.binary': 'other'}},
@@ -200,10 +202,29 @@ class BrowserAudioTests(unittest.TestCase):
                                  'browser_streams_corked': 1, 'browser_streams_running': 1,
                                  'capture_streams': 1})
         self.assertNotIn(secret, json.dumps(result))
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list],
+                         ['sinks', 'sources', 'sink-inputs', 'source-outputs'])
         for call in run.call_args_list:
             self.assertEqual(call.kwargs['env'], environment)
             self.assertEqual(call.kwargs['stderr'], subprocess.DEVNULL)
             self.assertEqual(call.kwargs['timeout'], 1)
+
+    def test_playback_metadata_requires_exact_unique_monitor_name_and_numeric_index(self):
+        for monitor in [None, 11, 'host-device.monitor']:
+            data = [{'name': SINK, 'index': 1, 'monitor_source': monitor}]
+            with self.subTest(monitor=monitor), patch('audio.subprocess.run',
+                    return_value=subprocess.CompletedProcess([], 0, json.dumps(data))) as run:
+                self.assertEqual(_playback_status({}), {'status': 'unavailable'})
+                self.assertEqual(run.call_count, 1)
+        sink = [{'name': SINK, 'index': 1, 'monitor_source': SINK + '.monitor'}]
+        for sources in [[], [{'name': 'host-device.monitor', 'index': 11}],
+                        [{'name': SINK + '.monitor', 'index': '11'}],
+                        [{'name': SINK + '.monitor', 'index': True}],
+                        [{'name': SINK + '.monitor', 'index': 11}] * 2]:
+            responses = [subprocess.CompletedProcess([], 0, json.dumps(data)) for data in [sink, sources]]
+            with self.subTest(sources=sources), patch('audio.subprocess.run', side_effect=responses) as run:
+                self.assertEqual(_playback_status({}), {'status': 'unavailable'})
+                self.assertEqual(run.call_count, 2)
 
     def test_playback_metadata_failure_does_not_expose_output(self):
         for output in ['private unparseable text', '{}', '["private"]',

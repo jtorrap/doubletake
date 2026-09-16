@@ -147,8 +147,19 @@ heard; the app's **audio** Configuration option switches TV audio off and requir
 an app restart. Each receiver has its own AirPlay connection, so audio timing may
 differ between TVs.
 
+**Check video** includes a short audio signal measurement and per-TV audio
+transport counters. The measurement returns only levels and counts; it does not
+record sound. Non-silent input and sent packets do not prove sound reached a TV.
+The optional **target_latency_ms** setting controls joint audio/video buffering:
+0 keeps automatic timing; a positive value up to 2000 allows a buffering test
+when sound or video arrives late. More buffering adds interaction delay.
+
+The headless display keeps a private authenticated local connection open so its
+presentation clock runs normally even when the preview is paused or closed.
+That connection requests no screen images and sends no keyboard or mouse input.
+
 The app uses Intel or software H.264 encoding, an amd64 Google Chrome build with video
-codecs, Xvfb, and the existing doubletake AirPlay implementation. Host networking supports receiver discovery and the
+codecs, a headless Xvnc display with Xvfb fallback, and the existing doubletake AirPlay implementation. Host networking supports receiver discovery and the
 negotiated AirPlay ports. Ingress accepts only Supervisor's gateway; VNC is
 password-protected and loopback-only. No debugging port is exposed.
 

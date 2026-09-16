@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.10
+
+- Report audio capture age, sent packets and stale-frame drops in Check video.
+- Allow a joint audio/video buffering target for diagnosing receiver timing.
+
 ## 0.1.9
 
 - Keep the headless display presentation clock running when the preview is closed.

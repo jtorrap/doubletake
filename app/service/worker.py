@@ -20,7 +20,8 @@ import sys
 import tempfile
 import time
 from model import browser_text, identifier
-from performance import video_stats
+from performance import video_stats, audio_stats
+from latency import target_latency_ms
 from audio import BrowserAudio
 from acceleration import gpu_info, va_capabilities, video_engine_counters, encoding_probe, process_cpu_counters
 from browser_preferences import prepare_profile
@@ -115,6 +116,7 @@ class Worker:
         self.media = {}
         self.encoder = None
         self.encoder_fallback = False
+        self.target_latency_ms = target_latency_ms(os.environ.get('DOUBLETAKE_TARGET_LATENCY_MS', '0'))
         # Desired connection generations outlive entries being cleaned up.
         # An explicit Stop must invalidate an automatic retry even after the
         # old sender was popped from self.senders and while stop() is awaiting.
@@ -191,8 +193,11 @@ class Worker:
                 'cpu_percent_of_one_core': cpu,
                 'video_encoder': self.encoder or 'not_started',
                 'encoder_fallback': self.encoder_fallback,
+                'target_latency_ms': self.target_latency_ms,
                 'video_engine_scope': 'browser decoding and sender encoding combined',
-                'senders': {key: {'encoder': entry.get('encoder', 'none'), **entry.get('performance', {})} for key, entry in self.senders.items()},
+                'senders': {key: {'encoder': entry.get('encoder', 'none'), **entry.get('performance', {}),
+                                 'audio_performance': entry.get('audio_performance', {})}
+                            for key, entry in self.senders.items()},
                 'video_engine_observable': bool(common),
                 'video_engine_active': video_ns > 0,
                 'video_engine_busy_percent': round(video_ns / elapsed * 100, 2) if common else None,
@@ -338,6 +343,15 @@ class Worker:
     def sender_line(self, tv_id, entry, line):
         # Only fixed status markers leave the sender's private output channel.
         # URLs, credentials and raw errors never reach the UI or logs.
+        if line.startswith('DOUBLETAKE_AUDIO_STATS '):
+            try:
+                stats = audio_stats(json.loads(line[len('DOUBLETAKE_AUDIO_STATS '):]))
+            except (ValueError, TypeError):
+                stats = None
+            if stats:
+                entry['audio_performance'] = stats
+                emit('audio_performance', tv_id=tv_id, data=stats)
+            return
         if line.startswith('DOUBLETAKE_VIDEO_STATS '):
             try:
                 stats = video_stats(json.loads(line[len('DOUBLETAKE_VIDEO_STATS '):]))
@@ -443,6 +457,8 @@ class Worker:
             config['hwaccel'] = 'none' if value.get('software_retry') else self.encoder
             Path(config["state_dir"]).mkdir(parents=True, exist_ok=True, mode=0o700)
             command = self.engine.sender_command(config, self.window)
+            if self.target_latency_ms:
+                command = [*command, '-target-latency-ms', str(self.target_latency_ms)]
             if self.audio:
                 command = [part for part in command if part != '-no-audio']
             process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)

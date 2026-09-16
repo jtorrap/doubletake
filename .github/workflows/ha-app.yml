@@ -126,7 +126,7 @@ jobs:
         run: docker run --rm --user 1000:1000 --entrypoint python3 -v "$PWD/app:/source:ro" doubletake-app -B -m unittest discover -s /source/tests -v
       - name: Prepare integration fixture
         run: |
-          go test ./cmd/doubletake-test-receiver ./internal/airplay -run 'TestReceiver|TestVideoStats'
+          go test ./cmd/doubletake-test-receiver ./internal/airplay -run 'TestReceiver|TestVideoStats|TestAudioStats|TestStreamAudioStats'
           go build -o bin/doubletake-test-receiver ./cmd/doubletake-test-receiver
           sudo apt-get update
           sudo apt-get install -y ffmpeg

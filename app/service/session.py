@@ -8,7 +8,15 @@ import signal
 import sys
 import time
 from model import atomic_json, browser_text
-from performance import video_stats
+from performance import video_stats, audio_stats
+
+
+def worker_environment():
+    return {key: os.environ[key] for key in [
+        'PATH', 'LANG', 'LC_ALL', 'HOME', 'DOUBLETAKE_LAUNCHER',
+        'DOUBLETAKE_HARDWARE_DECODING', 'DOUBLETAKE_HARDWARE_ENCODING',
+        'DOUBLETAKE_DISPLAY_BACKEND', 'DOUBLETAKE_TARGET_LATENCY_MS', 'DOUBLETAKE_AUDIO',
+    ] if key in os.environ}
 
 
 class Session:
@@ -62,6 +70,12 @@ class Session:
             return
         self.set_receivers({**self.runtime['receivers'], tv_id: {**self.runtime['receivers'][tv_id], 'audio': state}})
 
+    def audio_performance_event(self, value):
+        receiver = self.runtime['receivers'].get(value.get('tv_id'))
+        stats = audio_stats(value.get('data'))
+        if receiver is not None and stats:
+            receiver.update(audio_performance=stats, audio_performance_at=time.monotonic())
+
     def receivers_failed(self):
         self.set_receivers({tv_id: {'state': 'error', 'error': 'The browser session ended.', 'audio': 'error' if self.audio_enabled else 'disabled'} for tv_id in self.runtime['receivers']})
 
@@ -92,6 +106,8 @@ class Session:
                         # Polling clients receive metrics without republishing
                         # all MQTT discovery/state for every five-second sample.
                         receiver.update(performance=stats, performance_at=time.monotonic(), encoder=value['encoder'])
+                elif value.get('type') == 'audio_performance':
+                    self.audio_performance_event(value)
                 elif value.get("type") == "fatal":
                     stage = value.get("stage")
                     detail = " (" + stage + ")" if stage in {"dependencies", "display", "audio", "browser", "browser control", "preview"} else ""
@@ -129,7 +145,7 @@ class Session:
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
-        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_HARDWARE_ENCODING", "DOUBLETAKE_DISPLAY_BACKEND", "DOUBLETAKE_AUDIO"] if key in os.environ}
+        env = worker_environment()
         self.ready = asyncio.get_running_loop().create_future()
         command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)

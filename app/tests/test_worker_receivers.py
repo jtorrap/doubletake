@@ -144,6 +144,24 @@ class WorkerReceivers(unittest.IsolatedAsyncioTestCase):
             read.assert_not_called()
         self.assertEqual(self.worker.senders[ONE]['state'], 'starting')
 
+    async def test_latency_environment_sets_joint_sender_flag_only_when_positive(self):
+        for latency in [0, 250, 2000]:
+            with patch.dict(os.environ, {'DOUBLETAKE_TARGET_LATENCY_MS': str(latency)}), \
+                 patch.object(worker_module, 'load_engine', return_value=self.engine):
+                current = worker_module.Worker({'receivers_dir': self.directory.name})
+            current.engine_config, current.environment, current.window = {}, self.worker.environment, 42
+            current.encoder = 'none'
+            process = self.sender()
+            with patch.object(worker_module.subprocess, 'Popen', return_value=process) as launch:
+                await current.command({'action': 'cast', 'receiver': {'id': ONE, 'host': '127.0.0.1', 'port': 7000}})
+            command = launch.call_args.args[0]
+            if latency:
+                self.assertEqual(command[-2:], ['-target-latency-ms', str(latency)])
+                self.assertEqual(command.count('-target-latency-ms'), 1)
+            else:
+                self.assertNotIn('-target-latency-ms', command)
+            await current.stop_sender()
+
     async def test_pairing_code_writes_only_explicit_waiting_receiver(self):
         first, second = self.entry(ONE, state='pairing'), self.entry(TWO, state='pairing')
         for fields in [{}, {'tv_id': '3' * 16}, {'tv_id': ONE, 'value': 'line\nEnter'}]:
