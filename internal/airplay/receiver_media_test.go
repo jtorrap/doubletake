@@ -160,6 +160,43 @@ func TestReceiverMediaSessionDecryptsAndValidatesLegacyVideo(t *testing.T) {
 	}
 }
 
+func TestReceiverMediaObserverReceivesDecryptedFramesAndCodec(t *testing.T) {
+	packets := make(chan ReceiverVideoPacket, 3)
+	session := newTestReceiverMediaSession(t, receiverMediaConfig{
+		BindIP: "127.0.0.1",
+		VideoObserver: func(packet ReceiverVideoPacket) error {
+			packet.Payload = append([]byte(nil), packet.Payload...)
+			packets <- packet
+			return nil
+		},
+	})
+	key, iv := bytes.Repeat([]byte{0x31}, 16), bytes.Repeat([]byte{0x72}, 16)
+	if err := session.configureLegacyVideo(key, iv); err != nil {
+		t.Fatal(err)
+	}
+	senderCipher, err := newMirrorCipher(key, iv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialReceiverMediaTCP(t, session.Endpoints().VideoPort)
+	defer conn.Close()
+	codec := buildAVCCConfig([]byte{0x67, 0x42, 0, 0x1e}, []byte{0x68, 0x80})
+	frame := receiverTestAVCC([]byte{0x65, 0x80})
+	started := time.Now()
+	writeReceiverMirrorPacket(t, conn, 0x01, 0, codec)
+	writeReceiverMirrorPacket(t, conn, 0x00, 0x10, senderCipher.EncryptFrame(frame))
+	for _, want := range []ReceiverVideoPacket{{Type: 1, Payload: codec}, {Type: 0, Payload: frame}} {
+		select {
+		case got := <-packets:
+			if got.Type != want.Type || !bytes.Equal(got.Payload, want.Payload) || got.ReceivedAt.Before(started) {
+				t.Fatalf("observed packet = %+v, want type %d and plaintext %x", got, want.Type, want.Payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing observed video packet")
+		}
+	}
+}
+
 func TestReceiverMediaSessionRejectsCorruptLegacyVideo(t *testing.T) {
 	key := bytes.Repeat([]byte{0x14}, 16)
 	iv := bytes.Repeat([]byte{0x25}, 16)

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.8
+
+- Probe Intel H.264 hardware encoding and use it when available, with software fallback.
+- Show measured sender frame rate and capture-to-send time for each TV.
+- Include frame lateness, process CPU and encoder details in Check video.
+- Pause the interactive preview independently while browser and TV playback continue.
+- Test distinct full-screen video frames and pacing with two active receivers.
+
 ## 0.1.7
 
 - Default to 1080p at 30 fps, retaining the 15 fps and 720p options.

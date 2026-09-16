@@ -3,6 +3,7 @@ import RFB from '../novnc/core/rfb.js';
 const $ = id => document.getElementById(id);
 let state = null, csrf = '', busy = false, rfb = null, connecting = false;
 let editing = null, removing = null, pairingTV = null;
+let previewPaused = false;
 let selectedTVs = new Set(), selectionDirty = false, pageSelectionDirty = false;
 let tvChoicesSignature = '', receiversSignature = '';
 const labels = {closed:'Browser closed', starting:'Starting browser', ready:'Browser ready', error:'Needs attention'};
@@ -42,6 +43,8 @@ function controls() {
   $('stop').disabled = busy || !Object.keys(receivers()).length;
   $('closeBrowser').disabled = busy || !ready;
   $('fullscreen').disabled = !ready;
+  $('pausePreview').disabled = !ready;
+  $('pausePreview').textContent = previewPaused ? 'Resume preview' : 'Pause preview';
   $('pasteText').disabled = busy || !ready || !rfb;
   $('checkVideo').disabled = busy || !ready;
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
@@ -84,7 +87,7 @@ function clearPairing() { $('pairValue').value = ''; $('pairError').textContent 
 function renderReceivers() {
   const entries = Object.entries(receivers());
   $('receiverSection').hidden = !entries.length;
-  const signature = JSON.stringify(entries.map(([id,receiver]) => [id,tvName(id),receiver.state,receiver.error,receiver.audio]));
+  const signature = JSON.stringify(entries.map(([id,receiver]) => [id,tvName(id),receiver.state,receiver.error,receiver.audio,receiver.performance,receiver.performance_age_seconds > 12]));
   if (signature !== receiversSignature) {
     receiversSignature = signature;
     $('receivers').replaceChildren();
@@ -103,6 +106,14 @@ function renderReceivers() {
         title.append(audio);
       }
       info.append(title);
+      if (receiver.performance) {
+        const performance = document.createElement('p'); performance.className = 'receiver-error';
+        const metrics = receiver.performance, stale = receiver.performance_age_seconds > 12;
+        performance.textContent = stale ? 'Waiting for fresh video measurements…' :
+          `${metrics.sent_fps.toFixed(1)} fps sent · ${receiver.encoder === 'vaapi' ? 'Intel GPU' : 'Software'} · ${Math.round(metrics.source_age_mean_ms)} ms capture to send`;
+        performance.title = 'Measures encoded frames sent, not frames displayed by the TV.';
+        info.append(performance);
+      }
       if (receiver.error) { const detail = document.createElement('p'); detail.className = 'receiver-error'; detail.textContent = receiver.error; info.append(detail); }
       const actions = document.createElement('div'); actions.className = 'actions';
       if (receiver.state === 'pairing') {
@@ -157,15 +168,17 @@ async function refresh() {
   $('sessionDetail').textContent=current.error || (page?`${page.name}${active.length?' → '+active.map(([id])=>tvName(id)).join(', '):''}`:'Open a page to sign in, click around, or start a TV view.');
   $('previewLabel').textContent=page?.name||'Browser preview';
   $('previewEmpty').hidden=current.browser==='ready';
-  if (current.browser==='ready' && !rfb && !connecting) connectPreview();
+  if (current.browser==='ready' && !previewPaused && !rfb && !connecting) connectPreview();
   if (current.browser!=='ready' && rfb) { rfb.disconnect(); rfb=null; $('screen').replaceChildren(); }
   if (current.browser!=='ready') $('previewState').textContent=labels[current.browser]||current.browser;
   controls();
 }
 async function connectPreview() {
+  if (previewPaused) return;
   connecting=true;
   try {
     const auth=await api('api/preview',undefined,'GET');
+    if (previewPaused) return;
     const url=new URL('ws/preview',document.baseURI); url.protocol=location.protocol==='https:'?'wss:':'ws:';
     $('screen').replaceChildren();
     const connection=new RFB($('screen'),url.href,{credentials:{password:auth.password},shared:true,wsProtocols:['binary','doubletake.'+csrf]});
@@ -208,6 +221,15 @@ $('stop').onclick=()=>run(async()=>{await api('api/action/stop',{});selectedTVs.
 $('closeBrowser').onclick=()=>run(async()=>{await api('api/action/close',{});selectedTVs.clear();selectionDirty=false;});
 document.querySelectorAll('[data-browser]').forEach(button=>button.onclick=()=>run(()=>api('api/action/browser',{action:button.dataset.browser})));
 $('fullscreen').onclick=()=>$('viewport').requestFullscreen();
+$('pausePreview').onclick=()=>{
+  previewPaused=!previewPaused;
+  if (previewPaused) {
+    const connection=rfb; rfb=null; connection?.disconnect();
+    $('screen').replaceChildren();
+    $('previewState').textContent='Preview paused · Browser and TVs keep playing';
+  } else if (!rfb && !connecting) connectPreview();
+  controls();
+};
 $('pasteText').onclick=()=>{
   $('pasteValue').value=''; $('pasteError').textContent='';
   $('pasteDialog').showModal(); $('pasteValue').focus();
@@ -257,7 +279,7 @@ $('checkVideo').onclick=()=>run(async()=>{
   try {
     const result=await api('api/diagnostics',{});
     $('videoScope').textContent=result.browser_inspection_available?'Browser video details are available.':
-      'Standard browser mode checks the GPU driver and activity. Detailed page and decoder inspection is available in diagnostic mode.';
+      'GPU activity includes browser decoding and TV encoding. Sender measurements count encoded frames; they do not measure frames displayed by the TV.';
     $('videoSummary').textContent=result.video_engine_active?'GPU video engine active':
       !result.hardware_decoding_enabled?'Hardware decoding is switched off':
       !result.render_nodes.length?'No accessible GPU found':

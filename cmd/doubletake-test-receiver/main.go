@@ -33,6 +33,7 @@ func run(args []string) int {
 	deviceID := flags.String("device-id", "", "receiver device ID advertised by /info (random when empty)")
 	debug := flags.Bool("debug", false, "enable verbose receiver protocol logging")
 	statsInterval := flags.Duration("stats-interval", 0, "periodic statistics interval (0 disables periodic output)")
+	videoCapturePath := flags.String("video-capture", "", "opt-in synthetic test media export path (new file only; disabled by default)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -66,6 +67,16 @@ func run(args []string) int {
 	}
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
+	var videoObserver func(airplay.ReceiverVideoPacket) error
+	if *videoCapturePath != "" {
+		capture, err := newReceiverVideoCapture(*videoCapturePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: create test video capture: %v\n", err)
+			return 1
+		}
+		defer capture.Close()
+		videoObserver = capture.Observe
+	}
 	server, err := airplay.NewReceiverServer(airplay.ReceiverConfig{
 		ListenAddress: *listenAddress,
 		Profile:       profile,
@@ -76,6 +87,7 @@ func run(args []string) int {
 		DeviceID:      *deviceID,
 		Logger:        logger,
 		Debug:         *debug,
+		VideoObserver: videoObserver,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: start receiver: %v\n", err)

@@ -56,6 +56,24 @@ def va_capabilities():
     return result
 
 
+def encoding_probe(quality, environment):
+    """Exercise the same Intel encoder/caps as the sender; discard all output."""
+    if not render_nodes():
+        return False
+    command = ['gst-launch-1.0', '-q', 'videotestsrc', 'num-buffers=8',
+               '!', f"video/x-raw,format=NV12,width={quality['width']},height={quality['height']},framerate={quality['fps']}/1",
+               '!', 'vah264enc', f"bitrate={quality['bitrate']}",
+               f"key-int-max={quality['fps'] * 2}", 'b-frames=0', 'rate-control=cbr',
+               '!', 'h264parse', '!', 'video/x-h264,stream-format=byte-stream,alignment=au',
+               '!', 'fakesink', 'sync=false']
+    try:
+        result = subprocess.run(command, env=environment, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def gpu_info(value):
     gpu = value.get('gpu', {})
     attributes = gpu.get('auxAttributes', {})
@@ -90,6 +108,25 @@ def video_engine_counters(proc=Path('/proc')):
         except OSError:
             continue
     return clients
+
+
+def process_cpu_counters(proc=Path('/proc')):
+    """Read CPU accounting by fixed role, without exposing command arguments."""
+    roles = {'chrome': 'browser', 'Xvfb': 'display', 'x11vnc': 'preview',
+             'gst-launch-1.0': 'capture_encode', 'doubletake': 'airplay', 'pulseaudio': 'audio'}
+    counters = {}
+    for process in proc.glob('[0-9]*'):
+        try:
+            if process.stat().st_uid != os.getuid():
+                continue
+            role = roles.get((process / 'comm').read_text().strip())
+            if not role:
+                continue
+            fields = (process / 'stat').read_text().rsplit(')', 1)[1].split()
+            counters[(process.name, role, fields[19])] = int(fields[11]) + int(fields[12])
+        except (OSError, ValueError, IndexError):
+            continue
+    return counters
 
 
 def main():

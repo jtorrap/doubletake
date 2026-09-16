@@ -18,6 +18,8 @@ import time
 import urllib.error
 import urllib.request
 
+import fullscreen_motion as motion
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('fixture', ROOT / 'scripts/browser-smoke.py')
 fixture = importlib.util.module_from_spec(spec)
@@ -42,9 +44,18 @@ def api(path, body=None):
 class Fixture(fixture.Fixture):
     clicked = False
     typed = ''
+    motion_clip = b''
+    motion_metrics = {}
 
     def do_GET(self):
-        if self.path == '/input-status':
+        if self.path in ('/motion', '/motion.mp4'):
+            body = motion.PAGE if self.path == '/motion' else Fixture.motion_clip
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html' if self.path == '/motion' else 'video/mp4')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == '/input-status':
             # Synthetic fixture only: acknowledge actual remote input before
             # the preview client changes focus or closes its VNC connection.
             body = json.dumps({'clicked': Fixture.clicked, 'typed': Fixture.typed}).encode()
@@ -57,7 +68,11 @@ class Fixture(fixture.Fixture):
             super().do_GET()
 
     def do_POST(self):
-        if self.path == '/input':
+        if self.path == '/motion-metrics':
+            Fixture.motion_metrics = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            self.send_response(204)
+            self.end_headers()
+        elif self.path == '/input':
             value = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             Fixture.clicked = bool(value.get('clicked'))
             Fixture.typed = value.get('typed', '')
@@ -84,6 +99,11 @@ def main():
         clip = work / 'clip.mp4'
         subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=30', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100', '-t', '4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-ac', '2', '-movflags', '+faststart', str(clip)], check=True)
         Fixture.clip = clip.read_bytes()
+        capture_path = work / 'synthetic-received-video.bin'
+        if CONTROL == 'native':
+            motion_clip = work / 'motion.mp4'
+            motion.create_clip(motion_clip)
+            Fixture.motion_clip = motion_clip.read_bytes()
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Fixture)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         receiver_ports = [fixture.free_port(), fixture.free_port()]
@@ -93,9 +113,10 @@ def main():
         def frames(index):
             return max([int(v) for v in re.findall(r'video_frames=(\d+)', logs[index].read_text())] or [0])
         try:
-            for port, log, profile in zip(receiver_ports, logs, ['uxplay', 'airserver']):
+            for index, (port, log, profile) in enumerate(zip(receiver_ports, logs, ['uxplay', 'airserver'])):
                 with log.open('w') as output:
-                    receivers.append(subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{port}', '-profile', profile, '-stats-interval', '200ms'], stdout=output, stderr=subprocess.STDOUT))
+                    capture_args = ['-video-capture', str(capture_path)] if CONTROL == 'native' and index == 0 else []
+                    receivers.append(subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{port}', '-profile', profile, '-stats-interval', '200ms', *capture_args], stdout=output, stderr=subprocess.STDOUT))
                 fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
             subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '-v', f'{ROOT / "app/tests"}:/testsource:ro', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
             def ready():
@@ -146,6 +167,30 @@ def main():
             measured_fps = [round((frames(i)-before_fps[i])/elapsed, 2) for i in range(2)]
             assert all(24 <= rate <= 36 for rate in measured_fps), measured_fps
             assert fixture.Fixture.metrics['videoWidth'] == 640
+            fullscreen_checks = None
+            if CONTROL == 'native':
+                fullscreen = api('/api/settings/pages', {'name':'Synthetic full-screen video', 'url':f'http://127.0.0.1:{server.server_port}/motion'})
+                api('/api/action/open', {'page_id':fullscreen['id']})
+                fixture.wait_for(lambda: Fixture.motion_metrics.get('presented', 0) >= 60, 15, 'full-screen source warm-up')
+                assert (Fixture.motion_metrics['width'], Fixture.motion_metrics['height']) == (1920,1080)
+                first_frame = motion.frame_count(capture_path)
+                browser_before = dict(Fixture.motion_metrics)
+                started_motion = time.monotonic()
+                time.sleep(12)
+                browser_after = dict(Fixture.motion_metrics)
+                motion_elapsed = time.monotonic() - started_motion
+                assert both_sending(), 'Full-screen motion stopped a receiver'
+                fullscreen_checks = motion.analyze_capture(capture_path, first_frame, work)
+                fullscreen_checks.update({
+                    'browser_presented_fps':round((browser_after['presented']-browser_before['presented'])/motion_elapsed,2),
+                    'browser_dropped_frames':browser_after['dropped']-browser_before['dropped'],
+                    'source_resolution':[1920,1080], 'two_senders_active':True,
+                    'apple_tv_presentation_and_av_sync_verified':False})
+                (ARTIFACTS/'fullscreen-motion.json').write_text(json.dumps(fullscreen_checks,indent=2))
+                assert fullscreen_checks['browser_presented_fps'] >= 24, fullscreen_checks
+                fixture.Fixture.metrics = {}
+                api('/api/action/open', {'page_id':page['id']})
+                fixture.wait_for(lambda: fixture.Fixture.metrics.get('path') == '/', 10, 'return from full-screen fixture')
             second = api('/api/settings/pages', {'name':'Second page', 'url':f'http://127.0.0.1:{server.server_port}/second'})
             before_packets = [packets(i) for i in range(2)]
             api('/api/action/open', {'page_id':second['id']})
@@ -197,6 +242,7 @@ def main():
                       'airplay_audio_packets': [packets(i,'audio') for i in range(2)],
                       'airplay_audio_rtp_packets': [packets(i,'audio_rtp') for i in range(2)],
                       'received_video_fps':measured_fps,
+                      'fullscreen_motion':fullscreen_checks,
                       'two_receivers_simultaneous':True, 'targeted_stop_and_failure_isolated':True,
                       'private_browser_audio':audio_checks, 'profile_and_cookie_retained': True,
                       'stop_preserves_browser': True, 'close_cleans_processes': True, 'real_apple_tv_tested': False}

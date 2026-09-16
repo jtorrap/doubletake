@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
-from acceleration import browser_flags, drm_nodes, drm_groups, video_engine_counters
+from acceleration import browser_flags, drm_nodes, drm_groups, video_engine_counters, encoding_probe
 from worker import Worker
 
 
@@ -55,6 +55,21 @@ class Acceleration(unittest.TestCase):
                 {'name':'kIsPlatformVideoDecoder','value':'true'}]}})
         self.assertEqual(worker.media, {'1': {'decoder':'GpuVideoDecoder','platform_decoder':True}})
         self.assertNotIn('secret', json.dumps(worker.media))
+
+    def test_encoding_requires_successful_real_pipeline_and_falls_back(self):
+        quality = {'width': 1920, 'height': 1080, 'fps': 30, 'bitrate': 8000}
+        with patch('acceleration.render_nodes', return_value=[]), patch('acceleration.subprocess.run') as run:
+            self.assertFalse(encoding_probe(quality, {}))
+            run.assert_not_called()
+        with patch('acceleration.render_nodes', return_value=[Path('/dev/dri/renderD128')]), patch('acceleration.subprocess.run') as run:
+            run.return_value.returncode = 1
+            self.assertFalse(encoding_probe(quality, {}))
+            run.return_value.returncode = 0
+            self.assertTrue(encoding_probe(quality, {}))
+            command = run.call_args.args[0]
+            self.assertIn('vah264enc', command)
+            self.assertIn('video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1', command)
+            self.assertIn('b-frames=0', command)
 
 
 if __name__ == '__main__':

@@ -36,6 +36,7 @@ type receiverMediaConfig struct {
 	EventSharedSecret []byte
 	TimingResponder   bool
 	MaxVideoPayload   uint32
+	VideoObserver     func(ReceiverVideoPacket) error
 }
 
 // receiverMediaEndpoints are the receiver-owned ports returned in SETUP
@@ -167,6 +168,7 @@ type receiverMediaSession struct {
 	eventEncrypted  bool
 	eventSecret     []byte
 	maxVideoPayload uint32
+	videoObserver   func(ReceiverVideoPacket) error
 	videoCryptoMu   sync.RWMutex
 	legacyVideoKey  [16]byte
 	legacyVideoIV   [16]byte
@@ -267,6 +269,7 @@ func newReceiverMediaSession(parent context.Context, cfg receiverMediaConfig) (*
 		eventEncrypted:  cfg.EventEncrypted,
 		eventSecret:     append([]byte(nil), cfg.EventSharedSecret...),
 		maxVideoPayload: maxVideoPayload,
+		videoObserver:   cfg.VideoObserver,
 		connections:     make(map[net.Conn]struct{}),
 		endpoints: receiverMediaEndpoints{
 			EventPort:     eventListener.Addr().(*net.TCPAddr).Port,
@@ -568,7 +571,7 @@ func (s *receiverMediaSession) drainVideo(conn net.Conn) {
 		}
 		var payload []byte
 		if payloadSize > 0 {
-			if videoCipher != nil && header[4] == 0x00 {
+			if s.videoObserver != nil || (videoCipher != nil && header[4] == 0x00) {
 				payload = make([]byte, payloadSize)
 				n, err := io.ReadFull(conn, payload)
 				s.counters.videoBytes.Add(uint64(n))
@@ -594,6 +597,7 @@ func (s *receiverMediaSession) drainVideo(conn net.Conn) {
 			}
 		}
 
+		receivedAt := time.Now()
 		s.counters.videoPackets.Add(1)
 		switch header[4] {
 		case 0x00:
@@ -611,6 +615,7 @@ func (s *receiverMediaSession) drainVideo(conn net.Conn) {
 					return
 				}
 				s.counters.videoDecrypted.Add(1)
+				payload = plain
 			}
 		case 0x01:
 			s.counters.videoCodecFrames.Add(1)
@@ -622,6 +627,16 @@ func (s *receiverMediaSession) drainVideo(conn net.Conn) {
 			}
 		case 0x02:
 			s.counters.videoHeartbeats.Add(1)
+		}
+		if s.videoObserver != nil {
+			if err := s.videoObserver(ReceiverVideoPacket{
+				Type: header[4], Timestamp: binary.LittleEndian.Uint64(header[8:16]),
+				ReceivedAt: receivedAt, Payload: payload,
+			}); err != nil {
+				s.counters.videoMalformed.Add(1)
+				dbg("[RECEIVER-VIDEO] test observer failed: %v", err)
+				return
+			}
 		}
 	}
 }

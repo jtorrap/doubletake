@@ -5,8 +5,8 @@ RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://
     && rm -rf /var/lib/apt/lists/*
 # Supervisor builds only this app directory. Pin and verify the separately
 # versioned capture engine instead of depending on files outside that context.
-RUN curl -fsSL https://codeload.github.com/jtorrap/doubletake/tar.gz/eb893212c93244dfd47908b4c5025a4652a75b8e -o engine.tar.gz \
-    && echo 'a974f137a820d84d745fd77390bf2f01d30359db20ac95ca61b00a92379ac251  engine.tar.gz' | sha256sum -c - \
+RUN curl -fsSL https://codeload.github.com/jtorrap/doubletake/tar.gz/5d78d014d3302f368741fb59b6b037370ba6391e -o engine.tar.gz \
+    && echo '2c6cffa9f3f9df52c29119df1f68707986a966db82f3e001ca9a488482171066  engine.tar.gz' | sha256sum -c - \
     && tar -xzf engine.tar.gz --strip-components=1 \
     && CGO_ENABLED=1 go test -tags fdk_aac ./internal/airplay -run '^TestFDKAACELDEncodesRawFrame$' \
     && CGO_ENABLED=1 go build -tags fdk_aac -trimpath -ldflags='-s -w' -o /doubletake ./cmd/doubletake
@@ -35,7 +35,7 @@ COPY service/ /opt/browser-app/
 RUN chmod 755 /opt/browser-app/acceleration.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.7" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.8" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

@@ -77,6 +77,19 @@ type ReceiverConfig struct {
 	DisplayHeight int
 	Logger        *log.Logger
 	Debug         bool
+	// VideoObserver is an opt-in synthetic-test hook. It receives borrowed,
+	// decrypted media bytes synchronously; callers must not retain Payload.
+	// Normal receivers do not retain or export any video content.
+	VideoObserver func(ReceiverVideoPacket) error
+}
+
+// ReceiverVideoPacket is one complete mirror packet observed by a test receiver.
+// ReceivedAt retains Go's monotonic clock; Timestamp is the original wire PTS.
+type ReceiverVideoPacket struct {
+	Type       byte
+	Timestamp  uint64
+	ReceivedAt time.Time
+	Payload    []byte
 }
 
 // ReceiverStats is a race-free snapshot of protocol and media activity.
@@ -1258,6 +1271,7 @@ func (c *receiverConnection) ensureMedia() error {
 		EventSharedSecret: keys.sharedSecret,
 		TimingResponder:   c.server.profile.ntpInitiator == receiverNTPSender,
 		MaxVideoPayload:   32 * 1024 * 1024,
+		VideoObserver:     c.server.cfg.VideoObserver,
 	})
 	if err != nil {
 		return fmt.Errorf("start receiver media endpoints: %w", err)

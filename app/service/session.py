@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import signal
 import sys
+import time
 from model import atomic_json, browser_text
+from performance import video_stats
 
 
 class Session:
@@ -25,7 +27,7 @@ class Session:
         self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "receivers": {}, "error": None}
 
     def state(self):
-        return {**self.runtime, 'receivers': {key: dict(value) for key, value in self.runtime['receivers'].items()},
+        return {**self.runtime, 'receivers': {key: {**value, 'performance_age_seconds': round(time.monotonic() - value.get('performance_at', time.monotonic()), 1)} for key, value in self.runtime['receivers'].items()},
                 'control_mode': self.control_mode,
                 'display': {key: self.quality.get(key, default) for key, default in [('width', 1920), ('height', 1080), ('fps', 30)]},
                 'audio_enabled': self.audio_enabled}
@@ -83,6 +85,13 @@ class Session:
                     self.receiver_event(value)
                 elif value.get('type') == 'audio':
                     self.audio_event(value)
+                elif value.get('type') == 'performance':
+                    stats = video_stats(value.get('data'))
+                    receiver = self.runtime['receivers'].get(value.get('tv_id'))
+                    if receiver is not None and stats and value.get('encoder') in {'vaapi', 'none'}:
+                        # Polling clients receive metrics without republishing
+                        # all MQTT discovery/state for every five-second sample.
+                        receiver.update(performance=stats, performance_at=time.monotonic(), encoder=value['encoder'])
                 elif value.get("type") == "fatal":
                     stage = value.get("stage")
                     detail = " (" + stage + ")" if stage in {"dependencies", "display", "audio", "browser", "browser control", "preview"} else ""
@@ -120,7 +129,7 @@ class Session:
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
-        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_AUDIO"] if key in os.environ}
+        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_HARDWARE_ENCODING", "DOUBLETAKE_AUDIO"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
         command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)

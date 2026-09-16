@@ -20,8 +20,9 @@ import sys
 import tempfile
 import time
 from model import browser_text, identifier
+from performance import video_stats
 from audio import BrowserAudio
-from acceleration import gpu_info, va_capabilities, video_engine_counters
+from acceleration import gpu_info, va_capabilities, video_engine_counters, encoding_probe, process_cpu_counters
 from browser_preferences import prepare_profile
 from native_control import browser_command as native_browser_command
 from native_control import accessibility_address
@@ -110,6 +111,8 @@ class Worker:
         self.stop_event = asyncio.Event()
         self.stage = "dependencies"
         self.media = {}
+        self.encoder = None
+        self.encoder_fallback = False
         self.native = config.get('control_mode', 'native') == 'native'
 
     def media_event(self, value):
@@ -133,12 +136,18 @@ class Worker:
         capabilities = await asyncio.to_thread(va_capabilities)
         info = gpu_info(await self.cdp.call('SystemInfo.getInfo')) if self.cdp else {}
         before = video_engine_counters()
+        cpu_before = process_cpu_counters()
         started = time.monotonic_ns()
         await asyncio.sleep(1)
         after = video_engine_counters()
+        cpu_after = process_cpu_counters()
         elapsed = time.monotonic_ns() - started
         common = before.keys() & after.keys()
         video_ns = sum(max(0, after[key] - before[key]) for key in common)
+        cpu = {}
+        for key in cpu_before.keys() & cpu_after.keys():
+            cpu[key[1]] = cpu.get(key[1], 0) + max(0, cpu_after[key] - cpu_before[key])
+        cpu = {role: round(ticks / os.sysconf('SC_CLK_TCK') / (elapsed / 1e9) * 100, 1) for role, ticks in cpu.items()}
         # Read only video dimensions/playback counters, including HA shadow DOM.
         # The fixed expression returns no page text, URLs, cookies, or inputs.
         expression = '''(() => {
@@ -170,6 +179,11 @@ class Worker:
                 'audio_enabled': self.audio is not None,
                 'audio': self.audio.diagnostics() if self.audio else {'ready': False},
                 'receiver_count': len(self.senders),
+                'cpu_percent_of_one_core': cpu,
+                'video_encoder': self.encoder or 'not_started',
+                'encoder_fallback': self.encoder_fallback,
+                'video_engine_scope': 'browser decoding and sender encoding combined',
+                'senders': {key: {'encoder': entry.get('encoder', 'none'), **entry.get('performance', {})} for key, entry in self.senders.items()},
                 'video_engine_observable': bool(common),
                 'video_engine_active': video_ns > 0,
                 'video_engine_busy_percent': round(video_ns / elapsed * 100, 2) if common else None,
@@ -307,6 +321,15 @@ class Worker:
     def sender_line(self, tv_id, entry, line):
         # Only fixed status markers leave the sender's private output channel.
         # URLs, credentials and raw errors never reach the UI or logs.
+        if line.startswith('DOUBLETAKE_VIDEO_STATS '):
+            try:
+                stats = video_stats(json.loads(line[len('DOUBLETAKE_VIDEO_STATS '):]))
+            except (ValueError, TypeError):
+                stats = None
+            if stats:
+                entry['performance'] = stats
+                emit('performance', tv_id=tv_id, data=stats, encoder=entry.get('encoder', 'none'))
+            return
         if 'Enter ' in line:
             entry['state'] = 'pairing'
             emit('airplay', tv_id=tv_id, state='pairing')
@@ -385,13 +408,21 @@ class Worker:
             receiver = value["receiver"]
             tv_id = identifier(receiver['id'])
             await self.stop_sender(tv_id)
+            if self.encoder is None:
+                enabled = os.environ.get('DOUBLETAKE_HARDWARE_ENCODING', 'true') == 'true'
+                available = enabled and await asyncio.to_thread(encoding_probe, self.engine_config, self.environment)
+                self.encoder = 'vaapi' if available else 'none'
+                self.encoder_fallback = enabled and not available
             config = {**self.engine_config, "target": receiver["host"], "port": receiver["port"], "state_dir": str(Path(self.config["receivers_dir"]) / receiver["id"]), "pair": False}
+            config['hwaccel'] = 'none' if value.get('software_retry') else self.encoder
             Path(config["state_dir"]).mkdir(parents=True, exist_ok=True, mode=0o700)
             command = self.engine.sender_command(config, self.window)
             if self.audio:
                 command = [part for part in command if part != '-no-audio']
             process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             entry = {'process': process, 'buffer': '', 'state': 'starting',
+                     'encoder': config['hwaccel'], 'receiver': receiver,
+                     'started': time.monotonic(),
                      'audio': 'starting' if self.audio else 'disabled'}
             self.senders[tv_id] = entry
             asyncio.get_running_loop().add_reader(process.stdout.fileno(), self.sender_output, tv_id, entry)
@@ -422,6 +453,14 @@ class Worker:
             for tv_id, entry in list(self.senders.items()):
                 if entry['process'].poll() is not None and self.senders.get(tv_id) is entry:
                     await self.stop_sender(tv_id)
+                    # A successful probe cannot cover every real receiver's
+                    # negotiated caps. Retry software once if VAAPI dies during
+                    # startup; leave the shared browser and other TVs intact.
+                    if tv_id not in self.senders and entry.get('encoder') == 'vaapi' and time.monotonic() - entry['started'] < 20 and not entry.get('performance'):
+                        self.encoder_fallback = True
+                        await self.command({'action': 'cast', 'receiver': entry['receiver'], 'software_retry': True})
+                        emit('airplay', tv_id=tv_id, state='starting')
+                        continue
                     # Stop/retry can run while process cleanup awaits. Ignore
                     # the old exit if a replacement connection already exists.
                     if tv_id not in self.senders:

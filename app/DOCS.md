@@ -98,6 +98,17 @@ The preview footer shows the configured output size and frame-rate target;
 actual playback depends on rendering, encoding, and the network. Measure CPU
 load while displaying your actual cameras and charts, especially with several TVs.
 
+Each connected TV shows measured **fps sent** and capture-to-send time. These count
+encoded pictures written to the connection, not unique pictures or frames displayed
+by the TV. **Check video** includes five-second timing windows, late-frame counts
+and CPU usage by role (100% is one CPU core). Pause the preview to stop its extra
+capture/network work while the browser and TVs keep playing; Resume restores input.
+
+**hardware_encoding** defaults to true. Before starting a sender, the app exercises
+Intel's VA-API H.264 encoder at the configured size. If the probe fails, it uses
+software encoding. An Intel sender that exits during startup gets one software
+retry. Changing the option requires an app restart and retains sign-ins/pairings.
+
 The browser always reports a dark color preference and defaults to 120% page
 zoom. Websites with automatic dark themes use that preference; a website's
 explicit theme setting can still take precedence. Per-site zoom overrides are
@@ -114,8 +125,9 @@ The **hardware_decoding** option disables this path for troubleshooting and
 requires an app restart. HEVC needs compatible GPU, driver, and browser support.
 
 While a camera is playing, choose **Check video** below the preview. Available
-profiles establish capability; **GPU video engine active** establishes activity
-during the sample. Technical details include video frame counters, browser
+profiles establish capability; **GPU video engine active** establishes combined
+decoding/encoding activity during the sample, not smooth browser presentation.
+Technical details include video frame counters, browser
 decoder properties in diagnostic mode, and container-local DRM activity. If activity
 cannot be observed, the check reports that it is unconfirmed. The check does not
 return page URLs, login fields, cookies, or raw browser logs.
@@ -126,7 +138,7 @@ heard; the app's **audio** Configuration option switches TV audio off and requir
 an app restart. Each receiver has its own AirPlay connection, so audio timing may
 differ between TVs.
 
-The app uses software H.264 encoding, an amd64 Google Chrome build with video
+The app uses Intel or software H.264 encoding, an amd64 Google Chrome build with video
 codecs, Xvfb, and the existing doubletake AirPlay implementation. Host networking supports receiver discovery and the
 negotiated AirPlay ports. Ingress accepts only Supervisor's gateway; VNC is
 password-protected and loopback-only. No debugging port is exposed.
