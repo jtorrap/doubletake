@@ -49,10 +49,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=engine /doubletake /usr/local/bin/doubletake
 COPY --from=engine /src/scripts/doubletake-browser /opt/doubletake/launcher.py
 COPY service/ /opt/browser-app/
-RUN chmod 755 /opt/browser-app/acceleration.py /opt/browser-app/youtube_native_host.py
+# The runtime uses umask 077. Create every public registration ancestor here
+# so the unprivileged browser can discover its native host after installation.
+RUN install -d -o root -g root -m 755 /etc/opt /etc/opt/chrome \
+      /etc/opt/chrome/native-messaging-hosts /opt/google/chrome/extensions \
+    && chmod 755 /opt/browser-app/acceleration.py /opt/browser-app/youtube_native_host.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.12" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.1.13" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

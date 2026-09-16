@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.13
+
+- Fix YouTube native-host discovery with the production startup permissions.
+- Verify browser access to its public registration while keeping the signing key private.
+
 ## 0.1.12
 
 - Play a pasted YouTube video URL with automatic playback and a full-window player.

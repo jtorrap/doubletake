@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import textwrap
 import threading
 import time
 import urllib.error
@@ -132,7 +133,39 @@ def main():
             # This disposable fixture starts server.py directly, so prepare the
             # same signed Linux extension before any browser/profile is opened.
             subprocess.run(['docker', 'exec', '--user', '0:0', 'doubletake-integration',
-                            'python3', '-B', '/opt/browser-app/youtube_extension_install.py'], check=True)
+                            'python3', '-B', '-c', textwrap.dedent('''\
+                import os
+                from pathlib import Path
+                import stat
+                from youtube_extension_install import install_extension
+                os.umask(0o077)
+                install_extension()
+                signing = Path('/data/doubletake/youtube-signing')
+                for item, mode in ((signing, 0o700), (signing / 'key.pem', 0o600)):
+                    details = item.stat()
+                    assert details.st_uid == 0 and stat.S_IMODE(details.st_mode) == mode
+                ''')], check=True)
+            # Exercise traversal as the actual browser user. Testing only the
+            # leaf mode misses an inaccessible ancestor created under umask 077.
+            subprocess.run(['docker', 'exec', '--user', '1000:1000', 'doubletake-integration',
+                            'python3', '-B', '-c', textwrap.dedent('''\
+                import json
+                import os
+                from pathlib import Path
+                import stat
+                assert os.geteuid() == 1000
+                for name in ('/etc/opt', '/etc/opt/chrome', '/etc/opt/chrome/native-messaging-hosts',
+                             '/opt/google/chrome/extensions'):
+                    details = Path(name).stat()
+                    assert details.st_uid == 0 and stat.S_IMODE(details.st_mode) == 0o755
+                    assert os.access(name, os.R_OK | os.X_OK)
+                metadata = json.loads(Path('/opt/browser-app/youtube-extension-install.json').read_bytes())
+                Path('/opt/browser-app/youtube-extension.crx').read_bytes()
+                Path('/etc/opt/chrome/native-messaging-hosts/com.doubletake.youtube.json').read_bytes()
+                (Path('/opt/google/chrome/extensions') / (metadata['extension_id'] + '.json')).read_bytes()
+                assert os.access('/opt/browser-app/youtube_native_host.py', os.R_OK | os.X_OK)
+                assert not os.access('/data/doubletake/youtube-signing/key.pem', os.R_OK)
+                ''')], check=True)
             page = api('/api/settings/pages', {'name': 'Live dashboard', 'url': f'http://127.0.0.1:{server.server_port}/'})
             tv = api('/api/settings/tvs', {'name': 'Test TV', 'host': '127.0.0.1', 'port': receiver_ports[0]})
             tv2 = api('/api/settings/tvs', {'name': 'Second TV', 'host': '127.0.0.1', 'port': receiver_ports[1]})
@@ -249,6 +282,7 @@ def main():
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
             assert not any(name in processes for name in ['chrome', 'Xvfb', 'Xvnc', 'x11vnc', 'doubletake', 'pulseaudio']), processes
             result = {'control_mode':CONTROL, 'webdriver':fixture.Fixture.metrics['webdriver'],
+                      'youtube_companion_registration_permissions':True,
                       'native_navigation_and_history':True, 'sender_survives_navigation':True,
                       'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
                       'masked_clipboard_paste_preserves_unicode_and_punctuation': True, 'paste_dialog_cleared': True,
