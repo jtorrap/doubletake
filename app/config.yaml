@@ -30,10 +30,12 @@ options:
   audio: true
   hardware_decoding: true
   hardware_encoding: true
+  display_backend: auto
   browser_control: native
 schema:
   quality: list(1080p_15|1080p_30|720p_30)
   audio: bool
   hardware_decoding: bool
   hardware_encoding: bool?
+  display_backend: list(auto|xvfb|xvnc)?
   browser_control: list(native|diagnostic)

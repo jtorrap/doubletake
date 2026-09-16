@@ -46,8 +46,11 @@ class Fixture(fixture.Fixture):
     typed = ''
     motion_clip = b''
     motion_metrics = {}
+    page_requests = []
 
     def do_GET(self):
+        if self.path in ('/', '/motion', '/second'):
+            Fixture.page_requests = (Fixture.page_requests + [self.path])[-32:]
         if self.path in ('/motion', '/motion.mp4'):
             body = motion.PAGE if self.path == '/motion' else Fixture.motion_clip
             self.send_response(200)
@@ -118,7 +121,7 @@ def main():
                     capture_args = ['-video-capture', str(capture_path)] if CONTROL == 'native' and index == 0 else []
                     receivers.append(subprocess.Popen([str(ROOT / 'bin/doubletake-test-receiver'), '-listen', f'127.0.0.1:{port}', '-profile', profile, '-stats-interval', '200ms', *capture_args], stdout=output, stderr=subprocess.STDOUT))
                 fixture.wait_for(lambda: 'listening' in log.read_text(), 10, 'synthetic receiver')
-            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-v', f'{state}:/data/doubletake', '-v', f'{ROOT / "app/tests"}:/testsource:ro', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
+            subprocess.run(['docker', 'run', '-d', '--name', 'doubletake-integration', '--init', '--cap-add', 'SYS_ADMIN', '--network', 'host', '--user', '1000:1000', '-e', 'HOME=/home/browser', '-e', 'DOUBLETAKE_BROWSER_CONTROL='+CONTROL, '-e', 'DOUBLETAKE_DISPLAY_BACKEND=xvnc', '-v', f'{state}:/data/doubletake', '-v', f'{ROOT / "app/tests"}:/testsource:ro', '--entrypoint', 'python3', 'doubletake-app', '-u', '-B', '/opt/browser-app/server.py', '--development', '--port', str(PORT)], check=True)
             def ready():
                 try:
                     return api('/api/state')
@@ -140,6 +143,8 @@ def main():
                                               'page_zoom_percent':120, 'prefers_dark':True})
                 assert any(v['width'] == 640 and v['decoded_frames'] > 0 for v in diagnostics['videos'])
             assert diagnostics['display'] == expected_display, diagnostics['display']
+            assert diagnostics['display_server']['backend'] == 'xvnc', diagnostics['display_server']
+            assert diagnostics['display_server']['dri3'] is False, diagnostics['display_server']
             metrics = fixture.Fixture.metrics
             assert metrics['webdriver'] == (CONTROL == 'diagnostic'), metrics
             assert (metrics['css_width'],metrics['css_height'],metrics['zoom'],metrics['dark']) == (1600,900,120,True)
@@ -232,7 +237,7 @@ def main():
             assert api('/api/diagnostics', {})['display'] == diagnostics['display'], 'Display defaults changed on reopen'
             api('/api/action/close', {})
             processes = subprocess.check_output(['docker', 'top', 'doubletake-integration', '-eo', 'pid,comm'], text=True)
-            assert not any(name in processes for name in ['chrome', 'Xvfb', 'x11vnc', 'doubletake', 'pulseaudio']), processes
+            assert not any(name in processes for name in ['chrome', 'Xvfb', 'Xvnc', 'x11vnc', 'doubletake', 'pulseaudio']), processes
             result = {'control_mode':CONTROL, 'webdriver':fixture.Fixture.metrics['webdriver'],
                       'native_navigation_and_history':True, 'sender_survives_navigation':True,
                       'sandbox_enabled': True, 'video_decoded': True, 'video_diagnostics': diagnostics, 'live_websocket_updates': fixture.Fixture.metrics['updates'], 'interactive_keyboard_and_mouse': True,
@@ -249,6 +254,13 @@ def main():
             (ARTIFACTS / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps(result, indent=2))
         except Exception:
+            # Synthetic-only navigation evidence separates a missing request
+            # from a page which loaded but failed to report browser metrics.
+            (ARTIFACTS/'fixture-state.json').write_text(json.dumps({
+                'page_requests': Fixture.page_requests,
+                'dashboard_metrics': {key:value for key,value in fixture.Fixture.metrics.items()
+                                      if key in {'path','updates','moving','videoTime','videoWidth','paused','readyState','mediaError'}},
+                'motion_metrics': Fixture.motion_metrics}, indent=2))
             if CONTROL == 'native':
                 with contextlib.suppress(Exception):
                     inspection = subprocess.check_output(['docker','exec','doubletake-integration','python3','-B','/testsource/native_runtime.py','--inspect'],text=True,timeout=15)

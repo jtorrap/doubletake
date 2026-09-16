@@ -109,6 +109,14 @@ Intel's VA-API H.264 encoder at the configured size. If the probe fails, it uses
 software encoding. An Intel sender that exits during startup gets one software
 retry. Changing the option requires an app restart and retains sign-ins/pairings.
 
+**display_backend: auto** uses Xvnc with DRI3 on an accessible GPU, allowing
+Chrome to render without Xvfb's synchronous GPU-to-CPU presentation path.
+If startup or the DRI3 check fails, it returns to Xvfb. **xvfb** selects the
+previous backend; **xvnc** requires the new one. Changing this setting restarts
+the app. Both use a private authenticated X11 display and the same preview;
+Xvnc's built-in network listener is disabled. Check video reports the backend,
+DRI3 support and display renderer. Native sign-in mode remains unchanged.
+
 The browser always reports a dark color preference and defaults to 120% page
 zoom. Websites with automatic dark themes use that preference; a website's
 explicit theme setting can still take precedence. Per-site zoom overrides are

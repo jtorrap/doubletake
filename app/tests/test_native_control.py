@@ -50,9 +50,20 @@ class NativeControls(unittest.TestCase):
             typed = [c for c in xdo.call_args_list if c.args[0] == 'type']
             self.assertEqual(len(typed), 1)
             self.assertEqual(typed[0].kwargs['text'], 'Unicode 🔐 & quotes')
+            self.assertEqual(typed[0].args[typed[0].args.index('--delay')+1], '6')
+            self.assertEqual(typed[0].kwargs['timeout'], 30)
             self.assertNotIn('Unicode', repr(typed[0].args))
             self.assertFalse(any('Return' in c.args or 'ctrl+a' in c.args for c in xdo.call_args_list))
             self.assertEqual([c.args[0] for c in guard.call_args_list], [True, False])
+
+    def test_maximum_unicode_paste_is_not_truncated_or_put_in_arguments(self):
+        text = 'é🔐' * 2048
+        with patch.object(native, 'xdo', side_effect=lambda *args, **kw: '42' if args[0]=='getwindowpid' else '7' if args[0]=='getwindowfocus' else '') as xdo, patch.object(native, 'preview_readonly'):
+            native.perform({'action':'insert_text','pid':42,'window':7,'value':text})
+            typed = [call for call in xdo.call_args_list if call.args[0] == 'type']
+            self.assertEqual(len(typed), 1)
+            self.assertEqual(typed[0].kwargs['text'], text)
+            self.assertNotIn('é', repr(typed[0].args))
 
     def test_unconfirmed_address_bar_does_not_receive_url_or_enter(self):
         with patch.object(native, 'xdo', side_effect=lambda *args, **kw: '42' if args[0]=='getwindowpid' else '7' if args[0]=='getwindowfocus' else '') as xdo, patch.object(native, 'preview_readonly') as guard, patch.object(native, 'ChromeUI') as ui, patch.object(native, 'frozen_frame', return_value=contextlib.nullcontext()), patch.object(native, 'wait_for', side_effect=RuntimeError('unconfirmed')):
@@ -61,6 +72,14 @@ class NativeControls(unittest.TestCase):
                 native.perform({'action':'navigate','pid':42,'window':7,'url':'https://example.com/'})
             self.assertFalse(any(c.args[0] == 'type' or 'Return' in c.args for c in xdo.call_args_list))
             self.assertEqual([c.args[0] for c in guard.call_args_list], [True, False])
+
+    def test_navigation_rejects_inline_history_completion_before_enter(self):
+        with patch.object(native, 'xdo', side_effect=lambda *args, **kw: '42' if args[0]=='getwindowpid' else '7' if args[0]=='getwindowfocus' else '') as xdo, patch.object(native, 'preview_readonly'), patch.object(native, 'ChromeUI') as ui, patch.object(native, 'frozen_frame', return_value=contextlib.nullcontext()), patch.object(native, 'wait_for'), patch.object(native.time, 'sleep'):
+            ui.return_value.address.return_value = object()
+            native.perform({'action':'navigate','pid':42,'window':7,'url':'https://example.com/'})
+            keys = [call.args[-1] for call in xdo.call_args_list if call.args[0] == 'key']
+            self.assertEqual(keys, ['ctrl+l', 'Delete', 'Return', 'F11'])
+            self.assertEqual([call.kwargs.get('text') for call in xdo.call_args_list if call.args[0] == 'type'], ['https://example.com/'])
 
     def test_wrong_window_never_enables_or_types_controls(self):
         with patch.object(native, 'xdo', return_value='99') as xdo, patch.object(native, 'preview_readonly') as guard:

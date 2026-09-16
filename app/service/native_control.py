@@ -35,9 +35,9 @@ def browser_command(engine, config, bootstrap):
     return command + ['--start-fullscreen', '--force-renderer-accessibility', '--lang=en-US', bootstrap.as_uri()]
 
 
-def xdo(*args, text=None):
+def xdo(*args, text=None, timeout=25):
     return subprocess.run(['xdotool', *map(str, args)], input=text, text=True,
-                          capture_output=True, check=True, timeout=25).stdout.strip()
+                          capture_output=True, check=True, timeout=timeout).stdout.strip()
 
 
 def preview_readonly(enabled):
@@ -149,7 +149,13 @@ def perform(value):
             raise RuntimeError('browser_focus_unconfirmed')
         if action == 'insert_text':
             STAGE = 'text'
-            xdo('type', '--clearmodifiers', '--delay', '1', '--file', '-', text=text)
+            # xdotool temporarily binds unmapped Unicode keysyms, then restores
+            # the mapping after the keydown half-delay. At 1 ms Chrome lost
+            # eacute under load: it had only 0.5 ms to consume that mapping.
+            # Six ms gives the client a 3 ms window, while the maximum 4096
+            # characters take 24.6 seconds plus X11 overhead, inside the native
+            # helper's 35-second budget. Never log text or use a clipboard.
+            xdo('type', '--clearmodifiers', '--delay', '6', '--file', '-', text=text, timeout=30)
         elif action == 'navigate':
             ui = ChromeUI(pid)
             STAGE = 'freeze'
@@ -164,6 +170,14 @@ def perform(value):
                 xdo('type', '--clearmodifiers', '--delay', '1', '--file', '-', text=url)
                 # The focused native address bar is the only place Enter is
                 # generated. Paste never presses Enter or changes selection.
+                if not ui.address(focused=True):
+                    raise RuntimeError('address_focus_changed')
+                # Chrome can select an inline history completion after typing
+                # a shorter URL (for example the origin after /motion). Enter
+                # would accept that suffix and silently reopen the old page.
+                # Delete removes only the selected suffix; at the end of an
+                # exact URL without a completion it does nothing.
+                xdo('key', '--clearmodifiers', 'Delete')
                 if not ui.address(focused=True):
                     raise RuntimeError('address_focus_changed')
                 xdo('key', '--clearmodifiers', 'Return')

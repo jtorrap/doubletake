@@ -26,6 +26,7 @@ from acceleration import gpu_info, va_capabilities, video_engine_counters, encod
 from browser_preferences import prepare_profile
 from native_control import browser_command as native_browser_command
 from native_control import accessibility_address
+from display import start_display
 
 
 def load_engine():
@@ -107,6 +108,7 @@ class Worker:
         self.cdp = None
         self.environment = None
         self.window = None
+        self.display_info = {}
         self.page_session = None
         self.stop_event = asyncio.Event()
         self.stage = "dependencies"
@@ -179,6 +181,7 @@ class Worker:
                 'last_control_error': getattr(self, 'native_error', None),
                 'display': {'width': self.engine_config['width'], 'height': self.engine_config['height'],
                             'fps': self.engine_config['fps'], **page.get('display', {})},
+                'display_server': self.display_info,
                 'hardware_decoding_enabled': os.environ.get('DOUBLETAKE_HARDWARE_DECODING', 'true') == 'true',
                 'audio_enabled': self.audio is not None,
                 'audio': self.audio.diagnostics() if self.audio else {'ready': False},
@@ -206,7 +209,7 @@ class Worker:
         self.engine_config["no_browser_sandbox"] = False
         Path(self.config["profile_dir"]).mkdir(mode=0o700, parents=True, exist_ok=True)
         self.stage = "display"
-        self.display, self.environment = self.engine.start_display(self.engine_config, runtime)
+        self.display, self.environment, self.display_info = await asyncio.to_thread(start_display, self.engine_config, runtime, self.engine)
         if self.native:
             # A filesystem socket inside the private container/runtime avoids
             # abstract UNIX sockets shared by HA host-network applications.

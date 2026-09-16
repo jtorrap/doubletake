@@ -112,7 +112,7 @@ def video_engine_counters(proc=Path('/proc')):
 
 def process_cpu_counters(proc=Path('/proc')):
     """Read CPU accounting by fixed role, without exposing command arguments."""
-    roles = {'chrome': 'browser', 'Xvfb': 'display', 'x11vnc': 'preview',
+    roles = {'chrome': 'browser', 'Xvfb': 'display', 'Xvnc': 'display', 'x11vnc': 'preview',
              'gst-launch-1.0': 'capture_encode', 'doubletake': 'airplay', 'pulseaudio': 'audio'}
     counters = {}
     for process in proc.glob('[0-9]*'):

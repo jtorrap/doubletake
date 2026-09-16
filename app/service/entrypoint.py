@@ -50,6 +50,7 @@ def main():
                 DOUBLETAKE_BROWSER_CONTROL=options.get('browser_control', 'native'),
                 DOUBLETAKE_AUDIO="true" if options.get("audio", True) else "false",
                 DOUBLETAKE_HARDWARE_ENCODING="true" if options.get("hardware_encoding", True) else "false",
+                DOUBLETAKE_DISPLAY_BACKEND=options.get('display_backend', 'auto'),
                 DOUBLETAKE_HARDWARE_DECODING="true" if options.get("hardware_decoding", True) else "false")
     os.environ.clear()
     os.environ.update(keep)

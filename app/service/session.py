@@ -129,7 +129,7 @@ class Session:
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
-        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_HARDWARE_ENCODING", "DOUBLETAKE_AUDIO"] if key in os.environ}
+        env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "HOME", "DOUBLETAKE_LAUNCHER", "DOUBLETAKE_HARDWARE_DECODING", "DOUBLETAKE_HARDWARE_ENCODING", "DOUBLETAKE_DISPLAY_BACKEND", "DOUBLETAKE_AUDIO"] if key in os.environ}
         self.ready = asyncio.get_running_loop().create_future()
         command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)

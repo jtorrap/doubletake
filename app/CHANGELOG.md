@@ -2,11 +2,13 @@
 
 ## 0.1.8
 
+- Use a GPU-capable headless display on compatible Intel hosts, with an Xvfb fallback.
 - Probe Intel H.264 hardware encoding and use it when available, with software fallback.
 - Show measured sender frame rate and capture-to-send time for each TV.
 - Include frame lateness, process CPU and encoder details in Check video.
 - Pause the interactive preview independently while browser and TV playback continue.
 - Test distinct full-screen video frames and pacing with two active receivers.
+- Allow more time for native Unicode input and avoid unwanted URL autocomplete during navigation.
 
 ## 0.1.7
 
