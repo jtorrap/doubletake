@@ -1,4 +1,4 @@
-# Home Assistant deployment architecture — 0.2.1
+# Home Assistant deployment architecture — 0.2.2
 
 Doubletake Browser has one shared source and independently controlled TV
 connections. The source can be a saved browser page, YouTube video, Watch Later,

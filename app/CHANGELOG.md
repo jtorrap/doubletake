@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Correct the version reported in the UI and Home Assistant device discovery.
+
 ## 0.2.1
 
 - Allow for live broadcast demuxing delay with a shared one-second audio/video presentation target.
