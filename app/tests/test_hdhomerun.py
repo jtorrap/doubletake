@@ -7,7 +7,7 @@ import tempfile
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 from aiohttp.test_utils import TestClient, TestServer
@@ -129,6 +129,35 @@ class ChannelSession(Session):
 
 
 class ChannelLifecycle(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_during_tuning_prevents_late_tv_takeover(self):
+        session = Session('/unused',{})
+        warming, release = asyncio.Event(), asyncio.Event()
+        candidate = SimpleNamespace(terminate=Mock(), wait=AsyncMock())
+        async def prepare(_source):
+            warming.set()
+            await release.wait()
+            return candidate
+        session.prepare_channel = prepare
+        session.request = AsyncMock()
+        playback = asyncio.create_task(session.channel(SOURCE,[TV1]))
+        await warming.wait()
+        stop = asyncio.create_task(session.stop())
+        await asyncio.sleep(0)
+        release.set()
+        with self.assertRaises(ChannelError):
+            await playback
+        await stop
+        candidate.terminate.assert_called_once()
+        session.request.assert_not_awaited()
+        self.assertEqual(session.runtime['receivers'],{})
+
+    async def test_source_failure_does_not_reclaim_previous_tvs(self):
+        session = ChannelSession('/unused',{})
+        await session.channel(SOURCE,[TV1])
+        session.receivers_failed()
+        await session.channel({**SOURCE,'channel':'4.1'},[TV2],replace_receivers=False)
+        self.assertEqual(set(session.runtime['receivers']),{TV2['id']})
+
     async def test_same_source_join_exact_selection_switch_stop_and_no_reclaim(self):
         session = ChannelSession('/unused', {})
         await session.channel(SOURCE,[TV1])

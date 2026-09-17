@@ -72,10 +72,11 @@ function controls() {
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
   document.querySelectorAll('[data-receiver-action], #tvChoices input').forEach(control => control.disabled = busy);
   const changed = !sameSelection(Object.keys(receivers()));
-  const shared = source === 'hdhomerun' ? 'All selected TVs share this channel. Play channel applies your selection.' : state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
+  const playLabel = source === 'hdhomerun' ? 'Play channel' : 'Show on TVs';
+  const shared = source === 'hdhomerun' ? 'All selected TVs share this channel.' : state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
   $('selectionHint').textContent = changed && Object.keys(receivers()).length ?
-    `Selection changed. Show on TVs applies this set and disconnects unchecked TVs. ${shared}` :
-    `${shared} Apply your selection with Show on TVs.`;
+    `Selection changed. ${playLabel} applies this set and disconnects unchecked TVs. ${shared}` :
+    `${shared} Apply your selection with ${playLabel}.`;
 }
 function renderYouTubeStatus(current) {
   const youtube = current.youtube;
@@ -232,6 +233,8 @@ async function refresh() {
   renderYouTubeStatus(current);
   $('previewEmpty').hidden=current.browser==='ready';
   const channelMode = current.source_kind === 'hdhomerun';
+  document.querySelector('.preview').classList.toggle('channel-preview',channelMode);
+  if(channelMode) $('audioPreviewNote').textContent = current.audio_enabled === false ? 'TV audio is off in app Configuration.' : 'Video and sound play on the selected TVs.';
   $('previewEmpty').querySelector('h2').textContent = channelMode ? sourceLabel || 'HDHomeRun' : 'Your browser appears here';
   $('previewEmpty').querySelector('p').textContent = channelMode ? 'Channel video and sound play directly on the selected TVs. ' + (current.channel?.state === 'stopped' ? 'Playback stopped; the tuner is released.' : 'Check the TV connections above for status.') : 'Use your mouse and keyboard to sign in and interact. Your browser profile is saved between sessions.';
   if (current.browser==='ready' && !previewPaused && !rfb && !connecting) connectPreview();

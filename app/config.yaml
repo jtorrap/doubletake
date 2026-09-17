@@ -1,7 +1,7 @@
 name: Doubletake Browser
 version: "0.2.0"
 slug: doubletake_browser
-description: Interactive browser views with sound sent to one or more Apple TVs
+description: Browser views, YouTube and HDHomeRun channels on your selected Apple TVs
 url: https://github.com/jtorrap/doubletake
 arch:
   - amd64

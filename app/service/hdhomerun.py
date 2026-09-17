@@ -29,6 +29,7 @@ class ChannelError(ValueError):
         'unknown': 'The HDHomeRun no longer has this channel. Refresh the lineup.',
         'stream': 'Channel playback could not continue. Check reception and try again.',
         'startup': 'The HDHomeRun channel could not start. Check the device and try again.',
+        'cancelled': 'The channel change was cancelled.',
     }
     def __init__(self, code='startup'):
         self.code = code if code in self.messages else 'startup'

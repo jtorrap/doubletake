@@ -1,99 +1,95 @@
-# Home Assistant deployment plan
+# Home Assistant deployment architecture — 0.2.0
 
-Version 0.1.7 runs one persistent browser with a separate AirPlay sender for each
-connected TV. All TVs share the same page, browser interactions, and audio. The
-default output is 1920 × 1080 at 30 fps, with browser audio enabled.
+Doubletake Browser has one shared source and independently controlled TV
+connections. The source can be a saved browser page, YouTube video, Watch Later,
+or an unprotected HDHomeRun channel. All selected TVs receive the same source.
 
-## User flow
+## Channel flow
 
-1. Open the app from Home Assistant's sidebar.
-2. Add named pages and Apple TVs, or discover Apple TVs on the local network.
-3. Select a page and choose **Open browser**. The live preview accepts mouse and
-   keyboard input, including normal Home Assistant sign-in and navigation.
-4. Check one or more TVs and choose **Show on TVs**. This applies exactly the
-   checked set and disconnects unchecked TVs. The initial selection reflects
-   current connections; polling preserves unsubmitted checkbox changes.
-5. Use each TV's named pairing dialog, video/audio status, and **Stop** control.
-   **Stop all** retains the browser; **Close browser** also saves its profile and
-   closes it. The preview supports masked password Paste and is silent.
+1. Choose **HDHomeRun channel** in the existing Source selector. Local discovery
+   reads the tuner's current lineup; the address field is a discovery fallback.
+2. Search by channel number/name, optionally save app-local favorites, and
+   select a channel. Selection alone never starts a tuner or TV.
+3. Check TVs and press **Play channel**. The UI applies exactly that receiver set.
+   A per-TV MQTT launch instead adds its TV to the current shared source.
+4. Stop one TV independently, or Stop all. The last receiver leaving closes the
+   tuner input and worker. Startup, MQTT reconnect and app restart never play.
 
 ## Components
 
 ```mermaid
 flowchart LR
-  UI[HA authenticated app interface] --> API[App controller]
-  UI <-->|noVNC through Ingress| Browser[One Chrome browser on Xvfb]
-  API --> Browser
-  API --> Senders[One Doubletake sender per TV]
-  Browser -->|Shared X11 window capture| Senders
-  Browser --> Audio[Private PulseAudio sink]
-  Audio -->|Monitor capture| Senders
-  Senders --> TVs[Selected Apple TVs]
-  HA[HA device buttons and status] <-->|MQTT discovery| API
+  UI[HA Ingress UI] --> Controller[Shared source controller]
+  HA[HA MQTT controls] --> Controller
+  Controller --> Browser[Persistent Chrome worker]
+  Controller --> Media[Private channel worker]
+  HDHR[One HDHomeRun HTTP input] --> Media
+  Media --> Video[Decode and shared H.264 encoders]
+  Media --> Audio[Timestamped stereo PCM]
+  Video --> Senders[Existing per-TV AirPlay sessions]
+  Audio --> Senders
+  Browser --> Senders
+  Senders --> TVs[Selected TVs]
 ```
 
-- The app controller stores named pages, saved receivers, and stable IDs in
-  its private `/data` volume. It starts a separate browser worker only on demand.
-- The browser worker owns Chrome, Xvfb, loopback VNC, a private PulseAudio daemon,
-  and independently managed AirPlay senders. Browser audio reaches every sender
-  through the private sink monitor; no host microphone or audio device is needed.
-  It has no Supervisor/MQTT credentials and receives commands over private pipes.
-- The interactive preview uses noVNC, proxied over an authenticated Ingress
-  WebSocket. VNC has a separate ephemeral password and listens only on loopback.
-- Chrome retains its sandbox. Native desktop controls are the default, with no
-  browser debugging channel. A private debugging pipe remains an optional
-  diagnostic mode. Browser-close requests allow cookies and local storage to
-  flush before process cleanup. GPU video decoding is enabled when a compatible
-  render device is accessible; AirPlay H.264 encoding remains in software.
-- Pairing credentials are separate for each saved TV. The browser profile is
-  shared across receiver choices, so switching TVs reuses the same website login.
-- MQTT discovery exposes a device named **TV name Browser**, one **Show page**
-  button per named page, **Stop**, **Status**, and **Page** sensors. Names can
-  change without changing device/entity unique IDs. A launch button adds its TV
-  to the existing receiver set. Launching the already selected page preserves
-  the current browser interaction; another page changes the shared browser for
-  all TVs. Commands are not retained. Pairing and receiver failures remain
-  scoped to their TV, and audio failures are visible even if video keeps sending.
+- The controller validates device identity and the lineup before resolving an
+  internal channel URL. It does not accept arbitrary stream URLs, redirects,
+  tuner locks, or authentication parameters. DeviceAuth is discarded.
+- `channels.json` is a versioned private sidecar for device metadata, favorites
+  and staged HA selections. Existing settings, IDs, browser profile, companion
+  signing key and per-TV pairing files retain their formats and locations.
+- The media worker runs as the existing unprivileged app user without
+  Supervisor/MQTT credentials. One GStreamer pipeline demultiplexes the tuner
+  connection, decodes/deinterlaces video and produces timestamped stereo PCM.
+- H.264 video is shared by matching receiver canvases. Different canvases add
+  encoding branches, not tuner connections. Private Unix sockets carry
+  timestamped RFC4571 RTP into the existing Go AirPlay session implementation.
+  Each receiver negotiates its own ALAC or AAC-ELD audio encoder.
+- The first channel backend uses software encoding because the image's VA
+  encoder has unverified broadcast timestamp behavior. It targets 1080p30 or
+  the existing 720p30 configuration. Browser GPU settings retain their behavior.
+  Channel mode uses a 350 ms automatic presentation lead; an explicit app
+  latency setting still applies. These settings do not guarantee physical sync.
+- A new channel warms before replacing the current source when a tuner is
+  available. Only an explicit tuner-busy response permits releasing our own
+  input for one retry. Reception/decoder failures preserve the current source.
+  Stop invalidates an in-progress warmup. No automatic source reconnect occurs.
+- Receiver queues are bounded and independent. A slow or failed receiver is
+  disconnected instead of blocking its peers or being repeatedly reclaimed.
+- The UI uses a compact status panel during channel playback. Interactive
+  preview remains available for browser sources; channels do not open Chrome.
+- Additive MQTT entities provide a staged Channel select, Play selected channel,
+  and Source sensor. Existing page, YouTube, Stop and discovery IDs are retained.
+  Retained commands are ignored.
 
-## Deployment sequence
+## Release verification
 
-1. Run API, persistence, multi-receiver lifecycle, MQTT command/discovery, and access-control
-   checks against temporary test state.
-2. Build the actual amd64 app image on Linux. Exercise its sandboxed browser,
-   noVNC authentication/input, video, charts, saved login storage, and AirPlay
-   audio/video transport against synthetic local receivers, including stopping
-   one receiver while another continues. Verify native and diagnostic modes and
-   the responsive multi-TV UI. Never upload real HA content.
-3. Verify the HA host, configuration boundary, MQTT service, and backup. Install
-   the reviewed app through Supervisor, with no Core/integration replacement.
-4. Verify Ingress and MQTT device registration. Add the chosen local URLs and
-   receiver in app data, not public source. Complete sign-in interactively.
-5. Run the authorized real-TV trial; confirm the visible page, audible playback,
-   video/chart updates, independent stop behavior, and host resource usage.
-6. Record the app/source versions, backup, verification result, and remaining
-   limitations in the HA operating procedure.
+Build the exact amd64 image on Linux with the pinned Go source archive and hash.
+Require API/CSRF, persistence, source selection, Stop/cancellation, tuner error
+classification and retained-command tests. The synthetic MPEG-TS fixture sends
+known picture IDs and audio tones through real AirPlay protocol fixtures: two
+matching ALAC receivers and a different-canvas AAC-ELD receiver must share one
+input, sustain fresh frames, join/leave independently and release the tuner.
 
-## Initial limits
+Run browser sandbox, private Xvnc, preview input, profile retention, YouTube,
+native/diagnostic browser and responsive UI regressions in the same image.
+Synthetic transport success is separate from real TV acceptance.
 
-- amd64 HA hosts, matching the intended server; other CPU architectures need
-  a separately verified browser/codec image.
-- One shared page; independent per-TV pages are not supported. Browser controls
-  come from the web interface, not the Siri Remote. Preview audio is not provided.
-- A sending state means the sender negotiated its session; TV display acceptance
-  still needs physical observation. Audio active means capture started, not that
-  sound was confirmed on the TV. Frame rate is a configured target; rendering,
-  encoding, network conditions, and receiver behavior affect actual playback.
-- Receivers have independent connections and buffering. Exact synchronization
-  between TVs or synchronized multiroom audio is not guaranteed. Each additional
-  receiver adds encoding and network load.
-- Restart and backup close the session. The web service returns without taking
-  over a TV automatically. Browser authentication and receiver pairing persist.
+For each installation, verify a current native/off-server backup covering the
+profile, pairing files and companion key before the supported Supervisor update.
+Retain the old image/source and settings for rollback; do not uninstall or reset
+data. Check HA health, Ingress boundaries and MQTT discovery after deployment.
 
-## Supported integration points
+A real-TV trial requires an available selected receiver set. Check visible
+picture, audible sound, lip sync, tuning/switching, independent Stop, actual
+tuner allocation and host load for 30 minutes. Record unverified items explicitly
+and restore the previous source and TV set. Do not infer physical output from
+sender counters or call a short decoder probe a sustained TV acceptance run.
 
-- [Home Assistant app configuration](https://developers.home-assistant.io/docs/apps/configuration/)
-- [Ingress and its source-address boundary](https://developers.home-assistant.io/docs/apps/presentation/#ingress)
-- [Supervisor service discovery](https://developers.home-assistant.io/docs/apps/communication/#services-api)
-- [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
-- [MQTT buttons](https://www.home-assistant.io/integrations/button.mqtt/)
-- [noVNC API](https://novnc.com/noVNC/docs/API.html)
+## Boundaries
+
+Only unprotected ATSC 1.0 MPEG-2/H.264 with supported MPEG/AC-3/AAC audio is
+offered. Protected, ATSC 3.0/HEVC/AC-4 and unknown formats remain unavailable.
+No arbitrary media URLs, independent per-TV programs, recording, timeshift,
+live-TV pause, EPG, surround/caption guarantees or exact multiroom sync is added.
+The app image currently supports amd64 HA hosts.

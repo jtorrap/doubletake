@@ -28,6 +28,8 @@ class Session:
         self.process = self.reader_task = self.ready = None
         self.preview = None
         self.source_identity = None
+        self.channel_generation = 0
+        self.warming_process = None
         self.receiver_configs = {}
         self.closing_worker = False
         self.sequence = 0
@@ -102,7 +104,8 @@ class Session:
             receiver.update(audio_performance=stats, audio_performance_at=time.monotonic())
 
     def receivers_failed(self):
-        self.set_receivers({tv_id: {'state': 'error', 'error': 'The browser session ended.', 'audio': 'error' if self.audio_enabled else 'disabled'} for tv_id in self.runtime['receivers']})
+        self.receiver_configs.clear()
+        self.set_receivers({tv_id: {'state': 'error', 'error': 'The source session ended.', 'audio': 'error' if self.audio_enabled else 'disabled'} for tv_id in self.runtime['receivers']})
 
     async def read_events(self, process):
         try:
@@ -158,7 +161,7 @@ class Session:
                 self.receivers_failed()
                 if self.runtime.get("source_kind") == "hdhomerun":
                     self.update(browser="closed", channel={**(self.runtime.get("channel") or {}), "state":"error"},
-                                error="Channel playback ended. Press Play to try again.")
+                                error=self.runtime.get('error') or "Channel playback ended. Press Play to try again.")
                 else:
                     self.update(browser="error")
 
@@ -300,6 +303,7 @@ class Session:
 
     async def prepare_channel(self, source):
         """Make the new tuner input ready while the current view keeps playing."""
+        generation = self.channel_generation
         config = {'source': source, 'quality': {**self.quality, 'fps':30},
                   'receivers_dir': str(self.directory / 'receivers')}
         if os.environ.get('DOUBLETAKE_SENDER'):
@@ -310,8 +314,12 @@ class Session:
             str(Path(__file__).with_name('media_worker.py')), str(path),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, env=worker_environment(), start_new_session=True)
+        self.warming_process = process
         try:
-            event = json.loads(await asyncio.wait_for(process.stdout.readline(), 20))
+            raw = await asyncio.wait_for(process.stdout.readline(), 20)
+            if generation != self.channel_generation:
+                raise ChannelError('cancelled')
+            event = json.loads(raw)
             if event.get('type') != 'ready' or event.get('media') is not True:
                 raise ChannelError(event.get('code'))
             return process
@@ -325,10 +333,13 @@ class Session:
                     await process.wait()
             raise
         finally:
+            if self.warming_process is process:
+                self.warming_process = None
             with contextlib.suppress(FileNotFoundError):
                 path.unlink()
 
     async def adopt_channel(self, source):
+        generation = self.channel_generation
         identity = (source['device_id'], source['channel'])
         if self.source_identity == identity and self.process and self.process.returncode is None:
             return
@@ -340,10 +351,16 @@ class Session:
             # No spare tuner: release only our previous input, then try once.
             await self.close_worker()
             self.set_receivers({})
+            self.source_identity = None
+            self.update(channel={**(self.runtime.get('channel') or {}), 'state':'stopped'})
             candidate = await self.prepare_channel(source)
         try:
+            if generation != self.channel_generation:
+                raise ChannelError('cancelled')
             await self.cancel_youtube()
             await self.close_worker()
+            if generation != self.channel_generation:
+                raise ChannelError('cancelled')
         except BaseException:
             candidate.terminate()
             await candidate.wait()
@@ -404,8 +421,17 @@ class Session:
                 raise ValueError('One or more TVs could not connect')
 
     async def stop(self, tv_id=None):
+        self.cancel_channel_warmup()
         async with self.lock:
             await self.stop_receiver(tv_id)
+
+    def cancel_channel_warmup(self):
+        # Stop must invalidate tuning before waiting for the source lock. A
+        # slow/failed channel must never take over a TV after the user stops.
+        self.channel_generation += 1
+        if self.warming_process and self.warming_process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                self.warming_process.terminate()
 
     async def stop_receiver(self, tv_id=None):
         """Stop one TV or every TV; caller holds the session lock."""
@@ -467,6 +493,7 @@ class Session:
         self.closing_worker = False
 
     async def close(self):
+        self.cancel_channel_warmup()
         async with self.lock:
             with contextlib.suppress(ValueError, OSError):
                 await self.cancel_youtube()
