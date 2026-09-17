@@ -114,12 +114,9 @@ async def main():
                 original_line(tv_id, entry, value)
             worker.sender_line = line
             await worker.start(work)
-            # The original fixture delivered samples about 90 ms old; live
-            # tsdemux delivers them about 700 ms old. Delay delivery by 600 ms
-            # without touching the encoded A/V timestamps. This must exercise
-            # real stale-frame decisions in each receiver's audio path.
-            publish = worker.channel.publish
-            worker.channel.publish = lambda key, data: worker.channel.loop.call_later(.6, publish, key, data)
+            # Preserve the actual demux/decode running time. Segment-origin
+            # offsets previously hid buffering and required an artificial
+            # delivery delay; the corrected timestamp path exposes it directly.
             targets = [{'id':str(i+1)*16,'host':'127.0.0.1','port':p} for i,p in enumerate(ports)]
             def packets(index, field):
                 values = re.findall(r'\b' + field + r'=(\d+)', logs[index].read_text())

@@ -1,4 +1,4 @@
-# Home Assistant deployment architecture — 0.2.2
+# Home Assistant deployment architecture — 0.2.3
 
 Doubletake Browser has one shared source and independently controlled TV
 connections. The source can be a saved browser page, YouTube video, Watch Later,
@@ -45,10 +45,13 @@ flowchart LR
   encoding branches, not tuner connections. Private Unix sockets carry
   timestamped RFC4571 RTP into the existing Go AirPlay session implementation.
   Each receiver negotiates its own ALAC or AAC-ELD audio encoder.
+- Both RTP tracks flatten segment origins to pipeline running time before
+  ONVIF timestamp conversion. Broadcast and encoder stream-time offsets must
+  not become extra wall-clock delay; the source A/V relationship is retained.
 - The first channel backend uses software encoding because the image's VA
   encoder has unverified broadcast timestamp behavior. It targets 1080p30 or
   the existing 720p30 configuration. Browser GPU settings retain their behavior.
-  Channel mode uses a 1000 ms automatic presentation lead; an explicit app
+  Channel mode uses a 1500 ms automatic presentation lead; an explicit app
   latency setting still applies. These settings do not guarantee physical sync.
 - A new channel warms before replacing the current source when a tuner is
   available. Only an explicit tuner-busy response permits releasing our own

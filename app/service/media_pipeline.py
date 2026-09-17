@@ -12,6 +12,14 @@ import time
 from hdhomerun import ChannelError
 
 
+# ONVIF converts stream time to UTC while its automatic offset uses running
+# time. Broadcast/encoder segments can give those different origins. Flatten
+# segments to running time for both tracks, retaining their original A/V offset.
+TIMESTAMPED_RTP = ('identity single-segment=true signal-handoffs=false '
+                   '! rtponviftimestamp ntp-offset=-1 set-e-bit=false set-t-bit=false '
+                   '! rtpstreampay')
+
+
 class MediaPipeline:
     def __init__(self, url, quality, *, gst=None):
         if gst is None:
@@ -87,7 +95,7 @@ class MediaPipeline:
             '! audio/x-raw ! audioconvert ! audioresample '
             '! audio/x-raw,rate=44100,channels=2,format=S16BE,layout=interleaved '
             '! rtpL16pay pt=96 mtu=60000 timestamp-offset=0 perfect-rtptime=true max-ptime=8000000 '
-            '! rtponviftimestamp ntp-offset=-1 set-e-bit=false set-t-bit=false ! rtpstreampay '
+            f'! {TIMESTAMPED_RTP} '
             '! appsink name=audio emit-signals=true sync=true async=false max-buffers=32 drop=false')
         source = self.pipeline.get_by_name('source')
         source.set_property('uri', self.url)
@@ -141,7 +149,7 @@ class MediaPipeline:
             f'! x264enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate} key-int-max=30 bframes=0 '
             '! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au '
             '! rtph264pay pt=96 mtu=60000 aggregate-mode=none timestamp-offset=0 seqnum-offset=0 '
-            '! rtponviftimestamp ntp-offset=-1 set-e-bit=false set-t-bit=false ! rtpstreampay '
+            f'! {TIMESTAMPED_RTP} '
             '! appsink name=output emit-signals=true sync=true async=false max-buffers=32 drop=false', True)
         branch.get_by_name('output').connect('new-sample', self.sample, key)
         self.pipeline.add(branch)

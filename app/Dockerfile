@@ -57,7 +57,7 @@ RUN install -d -o root -g root -m 755 /etc/opt /etc/opt/chrome \
     && chmod 755 /opt/browser-app/acceleration.py /opt/browser-app/youtube_native_host.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.2.2" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.2.3" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

@@ -57,9 +57,9 @@ class MediaWorker(Worker):
                        '-creds', str(directory / 'airplay-credentials.json'), '-media-socket', self.media_socket]
             if not self.audio:
                 command.append('-no-audio')
-            # tsdemux buffers live broadcasts for about 700 ms. Leave headroom
-            # for decoding and transport without changing either source clock.
-            command += ['-target-latency-ms', str(self.target_latency_ms or 1000)]
+            # Broadcast demux/deinterlace and audio buffering can exceed one
+            # second. Keep both original source clocks with shared headroom.
+            command += ['-target-latency-ms', str(self.target_latency_ms or 1500)]
             process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             entry = {'process': process, 'buffer': '', 'state': 'starting', 'encoder': 'none',
