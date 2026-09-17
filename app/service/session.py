@@ -378,6 +378,10 @@ class Session:
                 except (ValueError, OSError):
                     failed = True
             if failed:
+                if not any(r['state'] in {'starting','pairing','sending'} for r in self.runtime['receivers'].values()):
+                    await self.close_worker()
+                    self.source_identity = None
+                    self.update(channel={**(self.runtime.get('channel') or {}), 'state':'error'})
                 raise ValueError('One or more TVs could not connect')
 
     async def cast(self, page, receivers):

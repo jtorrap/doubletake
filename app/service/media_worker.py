@@ -81,7 +81,7 @@ class MediaWorker(Worker):
                     # A receiver ending playback must never be reclaimed.
                     if self.sender_desired(tv_id, generation):
                         emit('airplay', tv_id=tv_id, state='error')
-            if self.had_sender and not self.senders:
+            if not self.senders and (self.had_sender or time.monotonic() - self.channel.started > 50):
                 self.stop_event.set()
             await asyncio.sleep(0.25)
 

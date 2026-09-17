@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 from aiohttp.test_utils import TestClient, TestServer
-from hdhomerun import ChannelCatalog, normalize_device, local_ipv4, valid_reply, discovery_packet
+from hdhomerun import ChannelCatalog, normalize_device, local_ipv4, valid_reply, discovery_packet, fetch_device
 from model import Store, discovery
 from mqtt_bridge import MQTTBridge
 from server import create_app
@@ -33,6 +33,28 @@ def device():
 
 
 class CatalogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_metadata_can_arrive_in_separate_chunks(self):
+        class Response:
+            status = 200
+            def __init__(self, value):
+                self.raw = json.dumps(value).encode()
+                self.content = self
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_args): pass
+            async def iter_chunked(self, _size):
+                for offset in range(0, len(self.raw), 3):
+                    yield self.raw[offset:offset+3]
+        class Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *_args): pass
+            def get(self, url, *, allow_redirects):
+                assert allow_redirects is False
+                return Response({'DeviceID':DEVICE,'DeviceAuth':'PRIVATE-FIXTURE'} if url.endswith('discover.json') else [])
+        with patch('hdhomerun.ClientSession',return_value=Client()):
+            result = await fetch_device(HOST)
+        self.assertEqual(result['id'],DEVICE)
+        self.assertNotIn('PRIVATE-FIXTURE',json.dumps(result))
+
     async def test_catalog_is_additive_and_never_keeps_device_auth_or_urls(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(directory)

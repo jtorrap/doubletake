@@ -96,9 +96,11 @@ async def fetch_device(host):
             async with client.get(f'http://{host}/{path}', allow_redirects=False) as response:
                 if response.status != 200:
                     raise ValueError('HDHomeRun is unavailable')
-                raw = await response.content.read(1024 * 1024 + 1)
-                if len(raw) > 1024 * 1024:
-                    raise ValueError('HDHomeRun response too large')
+                raw = bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    if len(raw) + len(chunk) > 1024 * 1024:
+                        raise ValueError('HDHomeRun response too large')
+                    raw.extend(chunk)
                 values.append(json.loads(raw))
         return normalize_device(host, *values)
 

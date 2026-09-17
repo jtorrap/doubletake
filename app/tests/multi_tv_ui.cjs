@@ -205,7 +205,7 @@ const outputDir = process.argv[2];
     await afterPoll();
     assert.equal(actions.length,countBeforeChannel,'Selecting a channel tuned immediately');
     assert.equal(await page.locator('#channelChoice').inputValue(),'10ABCDEF:4.1','Poll lost channel draft');
-    assert.equal(await page.locator('#channelChoice option[value="10ABCDEF:102.1"]').isDisabled(),true);
+    assert.equal(await page.locator('#channelChoice option[value="10ABCDEF:102.1"]').evaluate(el => el.disabled),true);
     await page.locator('#channelSearch').fill('2.1');
     await page.locator('#channelChoice').selectOption('10ABCDEF:2.1');
     await page.getByRole('button',{name:'☆ Favorite',exact:true}).click();
