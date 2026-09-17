@@ -15,6 +15,7 @@ from model import Store, VERSION
 from session import Session
 from mqtt_bridge import MQTTBridge
 from youtube import launch as youtube_launch
+from hdhomerun import ChannelCatalog
 
 
 async def discover_tvs():
@@ -54,6 +55,7 @@ async def discover_tvs():
 
 def create_app(directory, settings, *, development=False, session_factory=Session):
     store = Store(directory)
+    channels = ChannelCatalog(directory)
     csrf = secrets.token_urlsafe(32)
     session = session_factory(directory, settings.get("quality", {"width": 1920, "height": 1080, "fps": 30, "bitrate": 8000, "hwaccel": "none"}))
     bridge = None
@@ -101,6 +103,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
 
     app = web.Application(middlewares=[boundary], client_max_size=65536)
     app["store"], app["session"], app["csrf"] = store, session, csrf
+    app["channels"] = channels
 
     async def index(_request):
         return web.Response(text=index_html, content_type="text/html")
@@ -112,7 +115,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
         return web.FileResponse(path)
 
     async def state(_request):
-        return web.json_response({**store.public(), "runtime": session.state(), "mqtt_connected": bool(bridge and bridge.connected), "csrf": csrf, "version": VERSION})
+        return web.json_response({**store.public(), "channels": channels.public(), "runtime": session.state(), "mqtt_connected": bool(bridge and bridge.connected), "csrf": csrf, "version": VERSION})
 
     async def put_item(request):
         kind = request.match_info["kind"]
@@ -176,6 +179,15 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                     raise ValueError()
                 receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
             await session.youtube(**intent, receivers=receivers)
+        elif operation == 'channel':
+            if set(body) != {'device_id', 'channel', 'tv_ids'}:
+                raise ValueError()
+            tv_ids = body['tv_ids']
+            if not isinstance(tv_ids, list) or not tv_ids or any(not isinstance(v, str) for v in tv_ids) or len(tv_ids) != len(set(tv_ids)):
+                raise ValueError()
+            receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
+            source = await channels.source(body['device_id'], body['channel'])
+            await session.channel(source, receivers)
         elif operation == "stop":
             tv_id = body.get('tv_id')
             if tv_id is not None:
@@ -206,6 +218,22 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
 
     async def discover(_request):
         return web.json_response({"tvs": await discover_tvs()})
+
+    async def channel_discover(request):
+        body = await request.json()
+        if not isinstance(body, dict) or set(body) - {'host'}:
+            raise ValueError()
+        result = await channels.refresh(body.get('host'))
+        if bridge:
+            bridge.refresh()
+        return web.json_response(result)
+
+    async def channel_favorite(request):
+        body = await request.json()
+        if set(body) != {'device_id', 'channel', 'enabled'}:
+            raise ValueError()
+        channels.favorite(body['device_id'], body['channel'], body['enabled'])
+        return web.json_response(channels.public())
 
     async def diagnostics(_request):
         async with session.lock:
@@ -262,6 +290,24 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                 if set(command) - {'action', 'url', 'resume'}:
                     raise ValueError()
                 await session.youtube(**intent, receivers=[tv], replace_receivers=False)
+            elif command['action'] == 'select_channel':
+                if set(command) != {'action', 'selection'}:
+                    raise ValueError()
+                channels.select(tv_id, command['selection'])
+                if bridge:
+                    bridge.publish_state()
+            elif command['action'] == 'channel':
+                if set(command) == {'action'}:
+                    selection = channels.selected(tv_id)
+                    if not selection:
+                        raise ValueError()
+                    device_id, number = selection
+                elif set(command) == {'action', 'device_id', 'channel'}:
+                    device_id, number = command['device_id'], command['channel']
+                else:
+                    raise ValueError()
+                source = await channels.source(device_id, number)
+                await session.channel(source, [tv], replace_receivers=False)
             elif command['action'] == 'stop':
                 await session.stop(tv_id)
             else:
@@ -275,7 +321,7 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     async def lifecycle(_app):
         nonlocal bridge
         if settings.get("mqtt"):
-            bridge = MQTTBridge(store, settings["mqtt"], directory, mqtt_command, session.state)
+            bridge = MQTTBridge(store, settings["mqtt"], directory, mqtt_command, session.state, channels=channels)
             session.notify = bridge.publish_state
             bridge.start()
         yield
@@ -293,6 +339,8 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
     app.router.add_delete("/api/settings/{kind}/{item_id}", delete_item)
     app.router.add_post("/api/action/{operation}", action)
     app.router.add_post("/api/discover", discover)
+    app.router.add_post("/api/channels/discover", channel_discover)
+    app.router.add_post("/api/channels/favorite", channel_favorite)
     app.router.add_post("/api/diagnostics", diagnostics)
     app.router.add_get("/api/preview", preview_info)
     app.router.add_get("/ws/preview", preview_socket)

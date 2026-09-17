@@ -17,6 +17,7 @@ const outputDir = process.argv[2];
   let stateReads = 0;
   const fixture = {
     version:'test', csrf:'synthetic-csrf', mqtt_connected:true,
+    channels:{version:1,devices:[{id:'10ABCDEF',name:'HDHomeRun',channels:[{number:'2.1',name:'Test HD',supported:true},{number:'4.1',name:'Second',supported:true},{number:'102.1',name:'ATSC 3',supported:false,reason:'ATSC 3.0 is not supported yet'}]}],favorites:[]},
     pages:[{id:'basement',name:'Basement dashboard',url:'https://example.test/basement'}, {id:'youtube',name:'Youtube',url:'https://example.test/youtube'}],
     tvs:[{id:'upstairs',name:'Upstairs',host:'192.0.2.1',port:7000}, {id:'cart',name:'Cart',host:'192.0.2.2',port:7000}],
     runtime:{browser:'ready',page_id:'youtube',control_mode:'native',error:null,audio_enabled:true,
@@ -30,6 +31,7 @@ const outputDir = process.argv[2];
       return route.fulfill({json:fixture});
     }
     if (url.pathname === '/api/preview') return route.fulfill({json:{password:'synthetic-preview'}});
+    if (url.pathname === '/api/channels/favorite') { const body=route.request().postDataJSON(); fixture.channels.favorites=body.enabled?[body.device_id+':'+body.channel]:[]; return route.fulfill({json:fixture.channels}); }
     if (url.pathname.startsWith('/api/action/')) {
       const body = route.request().postDataJSON(), action = url.pathname.split('/').pop();
       actions.push({action,body});
@@ -44,6 +46,10 @@ const outputDir = process.argv[2];
         fixture.runtime.source_label = body.mode === 'watch_later' ? 'Watch Later' : 'YouTube';
         fixture.runtime.youtube = {mode:body.mode,state:'loading'};
         if (body.tv_ids) fixture.runtime.receivers = Object.fromEntries(body.tv_ids.map(id => [id,fixture.runtime.receivers[id] || {state:'starting',error:null,audio:'starting'}]));
+      } else if (action === 'channel') {
+        fixture.runtime.browser='closed'; fixture.runtime.source_kind='hdhomerun'; fixture.runtime.youtube=null;
+        fixture.runtime.channel={device_id:body.device_id,number:body.channel,state:'playing'}; fixture.runtime.source_label='2.1 Test HD';
+        fixture.runtime.receivers=Object.fromEntries(body.tv_ids.map(id=>[id,{state:'sending',audio:'active'}]));
       } else if (action === 'stop') {
         if (body.tv_id) delete fixture.runtime.receivers[body.tv_id]; else fixture.runtime.receivers = {};
       } else if (action === 'pin') fixture.runtime.receivers[body.tv_id] = {state:'sending',error:null,audio:'active'};
@@ -193,6 +199,28 @@ const outputDir = process.argv[2];
     await page.reload();
     await page.waitForFunction(() => document.querySelector('#sourceChoice').value === 'watch_later');
     assert.equal(await page.getByRole('checkbox',{name:'Include partly watched videos',exact:true}).isChecked(),true);
+    await page.getByRole('combobox',{name:'Source',exact:true}).selectOption('hdhomerun');
+    const countBeforeChannel=actions.length;
+    await page.locator('#channelChoice').selectOption('10ABCDEF:4.1');
+    await afterPoll();
+    assert.equal(actions.length,countBeforeChannel,'Selecting a channel tuned immediately');
+    assert.equal(await page.locator('#channelChoice').inputValue(),'10ABCDEF:4.1','Poll lost channel draft');
+    assert.equal(await page.locator('#channelChoice option[value="10ABCDEF:102.1"]').isDisabled(),true);
+    await page.locator('#channelSearch').fill('2.1');
+    await page.locator('#channelChoice').selectOption('10ABCDEF:2.1');
+    await page.getByRole('button',{name:'☆ Favorite',exact:true}).click();
+    await page.getByRole('button',{name:'★ Favorite',exact:true}).waitFor();
+    assert.equal(actions.length,countBeforeChannel,'Favoriting changed playback');
+    await page.getByRole('checkbox',{name:'Upstairs',exact:true}).uncheck();
+    await page.getByRole('button',{name:'Play channel',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#previewState').textContent.startsWith('HDHomeRun'));
+    assert.deepEqual(actions.at(-1),{action:'channel',body:{device_id:'10ABCDEF',channel:'2.1',tv_ids:['cart']}});
+    assert.equal(await page.locator('#screen canvas').count(),0,'Channel kept browser preview connected');
+    assert.match(await page.locator('#previewEmpty').innerText(),/Channel video and sound/);
+    await noOverflow();
+    if(outputDir) await page.screenshot({path:path.join(outputDir,'channel-745.png'),fullPage:true});
+    await page.setViewportSize({width:390,height:844}); await noOverflow();
+    if(outputDir) await page.screenshot({path:path.join(outputDir,'channel-390.png'),fullPage:true});
     assert.deepEqual(errors,[]);
     console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true,youtube_drafts_and_focus:true,youtube_payloads:true,youtube_status_separate:true,watch_later_resume_default:true,saved_page_unchanged:true,initial_youtube_source:true}));
   } finally { await browser.close(); }

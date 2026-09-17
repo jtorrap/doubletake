@@ -5,10 +5,10 @@ RUN echo 'deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://
     && rm -rf /var/lib/apt/lists/*
 # Supervisor builds only this app directory. Pin and verify the separately
 # versioned capture engine instead of depending on files outside that context.
-RUN curl -fsSL https://codeload.github.com/jtorrap/doubletake/tar.gz/95d1a381598ee8cb6548620e5686c3ae3ff2063d -o engine.tar.gz \
-    && echo '637c8d0bd831513008e956d0e2f3f0e88a0d62bff319a914813348d1cf1ba065  engine.tar.gz' | sha256sum -c - \
+RUN curl -fsSL https://codeload.github.com/jtorrap/doubletake/tar.gz/3e87a3f19edf8fbf39996149ad7174a7a7d7729e -o engine.tar.gz \
+    && echo 'bed1c211a71aa814e34a5d98d8022c4279e4c16caccf0eca13d9e416ca91d458  engine.tar.gz' | sha256sum -c - \
     && tar -xzf engine.tar.gz --strip-components=1 \
-    && CGO_ENABLED=1 go test -tags fdk_aac ./internal/airplay -run '^TestFDKAACELDEncodesRawFrame$' \
+    && CGO_ENABLED=1 go test -tags fdk_aac ./internal/airplay -run '^TestFDKAACELDEncodesRawFrame$|^TestMedia' \
     && CGO_ENABLED=1 go build -tags fdk_aac -trimpath -ldflags='-s -w' -o /doubletake ./cmd/doubletake
 
 FROM debian:bookworm-slim
@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
        google-chrome-stable python3 python3-aiohttp python3-paho-mqtt python3-zeroconf \
        xvfb xauth xdotool x11vnc novnc fonts-dejavu-core fonts-liberation \
        dbus-x11 at-spi2-core python3-pyatspi python3-xlib python3-pycryptodome \
+       python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
        pulseaudio pulseaudio-utils \
        gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
@@ -56,7 +57,7 @@ RUN install -d -o root -g root -m 755 /etc/opt /etc/opt/chrome \
     && chmod 755 /opt/browser-app/acceleration.py /opt/browser-app/youtube_native_host.py
 ENV DOUBLETAKE_BROWSER=/opt/browser-app/acceleration.py
 LABEL io.hass.name="Doubletake Browser" io.hass.description="Interactive browser views over AirPlay" \
-      io.hass.type="addon" io.hass.version="0.1.14" io.hass.arch="amd64" \
+      io.hass.type="addon" io.hass.version="0.2.0" io.hass.arch="amd64" \
       org.opencontainers.image.source="https://github.com/jtorrap/doubletake"
 WORKDIR /opt/browser-app
 STOPSIGNAL SIGTERM

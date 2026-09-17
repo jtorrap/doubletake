@@ -8,7 +8,7 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-VERSION = "0.1.14"
+VERSION = "0.2.0"
 ID = re.compile(r"^[a-f0-9]{16}$")
 
 
@@ -148,7 +148,7 @@ class Store:
             raise
 
 
-def discovery(store, prefix="homeassistant"):
+def discovery(store, prefix="homeassistant", channels=None):
     """A device per saved TV; a stable launch button per saved page."""
     installation = store.data["installation_id"]
     base = f"doubletake_browser/{installation}"
@@ -173,6 +173,19 @@ def discovery(store, prefix="homeassistant"):
             'command_topic': f"{base}/{tv['id']}/command", 'command_template': '{{ {"action": "youtube", "url": value} | tojson }}',
             'state_topic': f"{base}/{tv['id']}/state", 'value_template': "{{ '' }}", 'optimistic': False,
             'min': 0, 'max': 255, 'mode': 'text', 'retain': False, 'qos': 0}
+        if channels and channels.options():
+            uid = device_id + '_channel'
+            messages[f'{prefix}/select/{uid}/config'] = {**shared, 'unique_id': uid, 'name': 'Channel', 'icon': 'mdi:television-classic',
+                'options': list(channels.options()), 'command_topic': f"{base}/{tv['id']}/command",
+                'command_template': '{{ {"action": "select_channel", "selection": value} | tojson }}',
+                'state_topic': f"{base}/{tv['id']}/state", 'value_template': '{{ value_json.selected_channel }}',
+                'optimistic': False, 'retain': False, 'qos': 0}
+            uid = device_id + '_play_channel'
+            messages[f'{prefix}/button/{uid}/config'] = {**shared, 'unique_id': uid, 'name': 'Play selected channel', 'icon': 'mdi:play',
+                'command_topic': f"{base}/{tv['id']}/command", 'payload_press': '{"action":"channel"}', 'retain': False, 'qos': 0}
+            uid = device_id + '_source'
+            messages[f'{prefix}/sensor/{uid}/config'] = {**shared, 'unique_id': uid, 'name': 'Source', 'icon': 'mdi:television-play',
+                'state_topic': f"{base}/{tv['id']}/state", 'value_template': '{{ value_json.source }}'}
         for key, label, icon in [("state", "Status", "mdi:cast"), ("page", "Page", "mdi:web")]:
             uid = device_id + "_" + key
             messages[f"{prefix}/sensor/{uid}/config"] = {**shared, "unique_id": uid, "name": label, "icon": icon, "state_topic": f"{base}/{tv['id']}/state", "value_template": "{{ value_json." + key + " }}"}

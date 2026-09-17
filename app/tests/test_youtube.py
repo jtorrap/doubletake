@@ -145,7 +145,7 @@ class YouTubeAPI(unittest.IsolatedAsyncioTestCase):
         class Bridge:
             connected = True
 
-            def __init__(self, store, credentials, directory, on_command, state):
+            def __init__(self, store, credentials, directory, on_command, state, **kwargs):
                 self.command = on_command
                 bridges.append(self)
 

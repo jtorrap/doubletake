@@ -26,6 +26,9 @@ class Session:
         self.quality, self.notify = quality, notify
         self.process = self.reader_task = self.ready = None
         self.preview = None
+        self.source_identity = None
+        self.receiver_configs = {}
+        self.closing_worker = False
         self.sequence = 0
         self.pending = {}
         self.lock = asyncio.Lock()
@@ -37,12 +40,12 @@ class Session:
         self.youtube_sequence = 0
         self.youtube_launch_id = None
         self.runtime = {"browser": "closed", "airplay": "idle", "page_id": None, "tv_id": None, "receivers": {}, "error": None,
-                        'source_label': None, 'youtube': None}
+                        'source_label': None, 'youtube': None, 'source_kind': 'browser', 'channel': None}
 
     def state(self):
         return {**self.runtime, 'receivers': {key: {**value, 'performance_age_seconds': round(time.monotonic() - value.get('performance_at', time.monotonic()), 1)} for key, value in self.runtime['receivers'].items()},
                 'control_mode': self.control_mode,
-                'display': {key: self.quality.get(key, default) for key, default in [('width', 1920), ('height', 1080), ('fps', 30)]},
+                'display': {key: (30 if key == 'fps' and self.runtime.get('source_kind') == 'hdhomerun' else self.quality.get(key, default)) for key, default in [('width', 1920), ('height', 1080), ('fps', 30)]},
                 'audio_enabled': self.audio_enabled}
 
     def youtube_event(self, value):
@@ -77,6 +80,10 @@ class Session:
             return
         receivers = dict(self.runtime['receivers'])
         receivers[tv_id] = {**receivers[tv_id], 'state': state, 'error': 'The TV connection ended. Try Show again.' if state == 'error' else None}
+        if self.runtime.get('source_kind') == 'hdhomerun' and state == 'sending':
+            self.runtime['channel'] = {**(self.runtime.get('channel') or {}), 'state': 'playing'}
+        if state == 'error':
+            self.receiver_configs.pop(tv_id, None)
         if state == 'error' and self.audio_enabled:
             receivers[tv_id]['audio'] = 'error'
         self.set_receivers(receivers)
@@ -101,10 +108,12 @@ class Session:
             while raw := await process.stdout.readline():
                 value = json.loads(raw)
                 if value.get("type") == "ready":
-                    self.preview = {"port": int(value["port"]), "password": value["password"]}
-                    self.update(browser="ready", error=None)
+                    self.preview = None if value.get("media") else {"port": int(value["port"]), "password": value["password"]}
+                    self.update(browser="closed" if value.get("media") else "ready", error=None)
                     if not self.ready.done():
                         self.ready.set_result(True)
+                elif value.get("type") == "channel":
+                    self.update(channel={**(self.runtime.get("channel") or {}), "state": "error"}, error="Channel playback ended. Check tuner availability and reception, then press Play again.")
                 elif value.get("type") == "reply":
                     future = self.pending.pop(value.get("id"), None)
                     if future and not future.done():
@@ -143,30 +152,39 @@ class Session:
             self.pending.clear()
             if self.ready and not self.ready.done():
                 self.ready.set_exception(ValueError("The browser could not start"))
-            if self.process is process and self.runtime["browser"] != "closed":
+            if not self.closing_worker and self.process is process and (self.runtime["browser"] != "closed" or self.runtime.get("source_kind") == "hdhomerun"):
                 self.preview = None
                 self.receivers_failed()
-                self.update(browser="error")
+                if self.runtime.get("source_kind") == "hdhomerun":
+                    self.update(browser="closed", channel={**(self.runtime.get("channel") or {}), "state":"error"},
+                                error="Channel playback ended. Press Play to try again.")
+                else:
+                    self.update(browser="error")
 
     async def ensure(self, page):
-        if self.process and self.process.returncode is None and self.preview:
+        identity = (page["device_id"], page["channel"]) if page.get("kind") == "hdhomerun" else None
+        if self.process and self.process.returncode is None and ((identity is None and self.preview) or (identity is not None and identity == self.source_identity)):
             return False
         await self.close_worker()
         self.set_receivers({})
-        self.update(browser="starting", error=None)
+        self.source_identity = identity
+        self.update(browser="closed" if identity else "starting", source_kind="hdhomerun" if identity else "browser",
+                    channel={"device_id": page["device_id"], "number": page["channel"], "state": "starting"} if identity else None, error=None)
         config = {"url": page["url"], "quality": self.quality, "control_mode": self.control_mode,
                   "profile_dir": str(self.directory / "browser"), "receivers_dir": str(self.directory / "receivers")}
         if os.environ.get("DOUBLETAKE_BROWSER"):
             config["browser"] = os.environ["DOUBLETAKE_BROWSER"]
         if os.environ.get("DOUBLETAKE_SENDER"):
             config["sender"] = os.environ["DOUBLETAKE_SENDER"]
+        if identity:
+            config["source"] = page
         path = self.directory / "worker.json"
         atomic_json(path, config)
         # Explicit allowlist: credentials for Supervisor/MQTT never cross into
         # the page-rendering process or its browser/encoder children.
         env = worker_environment()
         self.ready = asyncio.get_running_loop().create_future()
-        command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("worker.py")), str(path)]
+        command = [sys.executable, "-u", "-B", str(Path(__file__).with_name("media_worker.py" if identity else "worker.py")), str(path)]
         self.process = await asyncio.create_subprocess_exec(*command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env, start_new_session=True)
         self.reader_task = asyncio.create_task(self.read_events(self.process))
         try:
@@ -198,7 +216,10 @@ class Session:
 
     async def open(self, page, receiver=None, *, preserve_view=False):
         async with self.lock:
+            restore = list(self.receiver_configs.values()) if self.runtime.get("source_kind") == "hdhomerun" else []
             await self.open_page(page, preserve_view=preserve_view)
+            for target in restore:
+                await self.add_receiver(target)
             if receiver:
                 await self.add_receiver(receiver)
 
@@ -225,6 +246,9 @@ class Session:
             raise ValueError('Select at least one TV or omit the selection')
         identity = (intent['mode'], intent.get('url'), intent['resume'])
         async with self.lock:
+            if self.runtime.get('source_kind') == 'hdhomerun' and (receivers is None or not replace_receivers):
+                joined = {**self.receiver_configs, **{r['id']: r for r in receivers or []}}
+                receivers = list(joined.values())
             if receivers is not None and replace_receivers:
                 desired = {receiver['id'] for receiver in receivers}
                 # An unselected TV must never briefly show the new source.
@@ -262,6 +286,7 @@ class Session:
     async def add_receiver(self, receiver):
         """Add or retry a receiver without interrupting its peers."""
         tv_id = receiver['id']
+        self.receiver_configs[tv_id] = dict(receiver)
         current = self.runtime['receivers'].get(tv_id, {})
         if current.get('state') in {'starting', 'pairing', 'sending'}:
             return
@@ -271,6 +296,89 @@ class Session:
         except (ValueError, OSError):
             self.receiver_event({'tv_id': tv_id, 'state': 'error'})
             raise
+
+    async def prepare_channel(self, source):
+        """Make the new tuner input ready while the current view keeps playing."""
+        config = {'source': source, 'quality': {**self.quality, 'fps':30},
+                  'receivers_dir': str(self.directory / 'receivers')}
+        if os.environ.get('DOUBLETAKE_SENDER'):
+            config['sender'] = os.environ['DOUBLETAKE_SENDER']
+        path = self.directory / 'channel-worker.json'
+        atomic_json(path, config)
+        process = await asyncio.create_subprocess_exec(sys.executable, '-u', '-B',
+            str(Path(__file__).with_name('media_worker.py')), str(path),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, env=worker_environment(), start_new_session=True)
+        try:
+            event = json.loads(await asyncio.wait_for(process.stdout.readline(), 20))
+            if event.get('type') != 'ready' or event.get('media') is not True:
+                raise ValueError('busy' if event.get('code') == 'busy' else 'channel_unavailable')
+            return process
+        except BaseException:
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), 8)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            raise
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+
+    async def adopt_channel(self, source):
+        identity = (source['device_id'], source['channel'])
+        if self.source_identity == identity and self.process and self.process.returncode is None:
+            return
+        try:
+            candidate = await self.prepare_channel(source)
+        except ValueError as error:
+            if str(error) != 'busy' or self.runtime.get('source_kind') != 'hdhomerun':
+                raise ValueError('The channel is unavailable; current playback is unchanged') from None
+            # No spare tuner: release only our previous input, then try once.
+            await self.close_worker()
+            self.set_receivers({})
+            candidate = await self.prepare_channel(source)
+        try:
+            await self.cancel_youtube()
+            await self.close_worker()
+        except BaseException:
+            candidate.terminate()
+            await candidate.wait()
+            raise
+        self.set_receivers({})
+        self.process = candidate
+        self.preview = None
+        self.source_identity = identity
+        self.ready = asyncio.get_running_loop().create_future()
+        self.ready.set_result(True)
+        self.update(browser='closed', source_kind='hdhomerun', page_id=None, youtube=None,
+                    channel={'device_id':source['device_id'], 'number':source['channel'], 'state':'starting'},
+                    source_label=source['label'], error=None)
+        self.reader_task = asyncio.create_task(self.read_events(candidate))
+
+    async def channel(self, source, receivers, *, replace_receivers=True):
+        """Play one resolved channel on the exact UI set or add MQTT receivers."""
+        if not receivers:
+            raise ValueError('Select at least one TV')
+        async with self.lock:
+            desired = {r['id']: r for r in receivers}
+            if not replace_receivers:
+                desired = {**self.receiver_configs, **desired}
+            for tv_id in list(self.runtime['receivers']):
+                if tv_id not in desired:
+                    await self.stop_receiver(tv_id)
+            await self.adopt_channel(source)
+            self.update(page_id=None, source_label=source['label'], error=None)
+            failed = False
+            for receiver in desired.values():
+                try:
+                    await self.add_receiver(receiver)
+                except (ValueError, OSError):
+                    failed = True
+            if failed:
+                raise ValueError('One or more TVs could not connect')
 
     async def cast(self, page, receivers):
         """Reconcile the UI's explicit selection against connected TVs."""
@@ -301,6 +409,11 @@ class Session:
         if self.process and self.process.returncode is None:
             await self.request('stop', **({'tv_id': tv_id} if tv_id is not None else {}))
         self.set_receivers({key: value for key, value in self.runtime['receivers'].items() if tv_id is not None and key != tv_id})
+        self.receiver_configs = {key: value for key, value in self.receiver_configs.items() if tv_id is not None and key != tv_id}
+        if not self.runtime["receivers"] and self.runtime.get("source_kind") == "hdhomerun":
+            await self.close_worker()
+            self.source_identity = None
+            self.update(channel={**(self.runtime.get("channel") or {}), "state": "stopped"}, error=None)
 
     async def browser_action(self, action):
         async with self.lock:
@@ -332,6 +445,7 @@ class Session:
     async def close_worker(self):
         process = self.process
         if process:
+            self.closing_worker = True
             if process.returncode is None:
                 # Ask the worker to flush Chrome before its private bus exits.
                 with contextlib.suppress(ValueError, OSError):
@@ -345,10 +459,13 @@ class Session:
             if self.reader_task:
                 await self.reader_task
         self.preview = None
+        self.closing_worker = False
 
     async def close(self):
         async with self.lock:
             with contextlib.suppress(ValueError, OSError):
                 await self.cancel_youtube()
             await self.close_worker()
-            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, receivers={}, error=None, source_label=None, youtube=None)
+            self.source_identity = None
+            self.receiver_configs.clear()
+            self.update(browser="closed", airplay="idle", page_id=None, tv_id=None, receivers={}, error=None, source_label=None, youtube=None, channel=None, source_kind="browser")

@@ -6,6 +6,10 @@ Named pages appear as launch buttons under each TV's Home Assistant device.
 YouTube links can launch directly into playback, and Watch Later can play
 unfinished videos in order. Both actions are available to HA automations.
 
+Choose **HDHomeRun channel** to discover your tuner, select a channel and play it
+on the same saved TVs. One tuner connection supplies every selected TV.
+Transcoding is internal; no stream URLs or separate media server are required.
+
 One shared browser page can play on several TVs at once, with separate connection,
 pairing, and Stop controls. The default output is 1080p at 30 fps. The interactive
 preview is silent; audio plays on the TVs. The app runs on amd64 Home Assistant

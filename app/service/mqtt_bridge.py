@@ -7,8 +7,9 @@ from model import atomic_json, discovery
 
 
 class MQTTBridge:
-    def __init__(self, store, credentials, directory, on_command, state):
+    def __init__(self, store, credentials, directory, on_command, state, channels=None):
         self.store, self.credentials, self.on_command, self.state = store, credentials, on_command, state
+        self.channels = channels
         self.loop = asyncio.get_running_loop()
         self.connected = False
         self.base = "doubletake_browser/" + store.data["installation_id"]
@@ -54,7 +55,7 @@ class MQTTBridge:
             return
         try:
             command = json.loads(message.payload)
-            if not isinstance(command, dict) or command.get("action") not in {"cast", "stop", "youtube", "watch_later"}:
+            if not isinstance(command, dict) or command.get("action") not in {"cast", "stop", "youtube", "watch_later", "channel", "select_channel"}:
                 return
         except (ValueError, TypeError):
             return
@@ -63,7 +64,7 @@ class MQTTBridge:
     def refresh(self):
         if not self.connected:
             return
-        messages = discovery(self.store)
+        messages = discovery(self.store, channels=self.channels)
         for topic in self.previous - messages.keys():
             if topic.startswith("homeassistant/") and ("doubletake_" + self.store.data["installation_id"] + "_") in topic:
                 self.client.publish(topic, b"", qos=1, retain=True)
@@ -83,7 +84,7 @@ class MQTTBridge:
             active = receiver is not None
             state = receiver['state'] if active else 'idle'
             page = (runtime.get('source_label') or pages.get(runtime.get("page_id"), "None")) if active else "None"
-            self.client.publish(f"{self.base}/{tv['id']}/state", json.dumps({"state": state, "page": page}), qos=1, retain=True)
+            self.client.publish(f"{self.base}/{tv['id']}/state", json.dumps({"state": state, "page": page, **({"source": runtime.get("source_kind", "browser") if active else "None", "selected_channel": self.channels.data["selected"].get(tv["id"], "")} if self.channels else {})}), qos=1, retain=True)
 
     async def stop(self):
         if self.connected:

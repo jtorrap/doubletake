@@ -267,3 +267,61 @@ The Dockerfile builds the AirPlay engine and launcher from an exact, checksum-
 verified source commit. The app's own controller and UI are built from this
 directory. Linux CI validates synthetic content only; device pairing and HA
 sign-in are separate deployment acceptance checks. See [PLAN.md](PLAN.md).
+
+
+## HDHomeRun channels
+
+Choose **HDHomeRun channel**, then **Find HDHomeRun**. Discovery reads the device's
+existing lineup; it never starts an antenna scan. A manual device address is
+available when broadcast discovery cannot cross your network. Search by number
+or name, optionally mark app-local favorites, check TVs and press **Play channel**.
+Choosing a channel or changing checkboxes alone does not change playback.
+
+All selected TVs share one source. **Play channel** applies the exact checked set.
+A late join to the same channel leaves existing playback running. Each TV keeps
+its normal pairing and Stop controls. Stopping the last TV releases the tuner.
+The preview area shows channel status; video and sound play on the TVs.
+Opening a saved page or YouTube source returns to the retained browser profile.
+The app never resumes a channel automatically on restart or MQTT reconnection.
+
+Under each existing HA TV device, **Channel** stages a choice and **Play selected
+channel** adds that TV to playback. A different channel changes the shared source
+for all connected TVs. **Source** and **Status** describe current playback.
+Automations can perform one atomic command without a staged selection by
+publishing, without retain, to `doubletake_browser/INSTALLATION_ID/TV_ID/command`:
+
+```json
+{"action":"channel","device_id":"DEVICE_ID","channel":"2.1"}
+```
+
+The Ingress API is `POST api/action/channel` with `device_id`, `channel` and a
+nonempty `tv_ids` array. IDs and the entire selection are validated before TV
+commands. URLs are resolved internally from the verified local lineup. The
+existing Ingress-only access and CSRF header are required.
+
+Unprotected MPEG-2/H.264 channels with AC-3, MPEG or AAC audio are supported.
+Protected channels and ATSC 3.0/AC-4 are marked unavailable. This release does
+not include a guide, recordings, time shifting, generic stream URLs, captions,
+surround-sound guarantees or exact synchronization between rooms.
+
+The channel worker shares one decoder and an H.264 encoder per receiver size,
+with stereo PCM encoded as each receiver's negotiated ALAC or AAC-ELD. It uses
+30 fps at the configured 1080p or 720p size and preserves source timestamps.
+Bookworm's hardware encoder rewrites timestamps, so this initial channel path
+uses software encoding; browser hardware settings retain their current behavior.
+Automatic channel buffering is 350 ms for the shared audio/video presentation
+lead; the app's explicit target-latency setting overrides it. This excludes
+broadcast and initial tuning delay. Select 720p_30 if host load is excessive.
+
+A new channel is decoded before TV takeover when a spare tuner is available.
+A busy response during a channel switch releases only this app's old input and
+retries once. It never forces or resets another tuner. A failed or ended TV
+connection is not automatically reclaimed. Press Play explicitly to retry.
+
+Channel discovery/favorites/selections are kept in private, versioned
+`channels.json`, separate from existing `settings.json`. Existing TV/page IDs,
+browser profile and pairing files are unchanged. The media worker receives no
+Supervisor or MQTT credentials; timestamped media uses a mode-0600 Unix socket
+inside its private runtime directory. Stream addresses and DeviceAuth are not
+published over MQTT or returned in the catalog. On rollback to 0.1.14, retain
+`channels.json`; that version ignores it and continues using the original data.

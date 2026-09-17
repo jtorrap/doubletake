@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Select an HDHomeRun channel and play it on the selected TVs from the same UI.
+- Discover the local lineup, search channels, and keep app-local favorites.
+- Share one tuner/decode path and matching H.264 encoders across TVs, with each receiver's negotiated audio.
+- Add a staged Channel selector, Play selected channel button and Source sensor to existing HA TV devices.
+- Validate and warm a channel before TV takeover; release the tuner when the final TV stops.
+- Retain saved pages, YouTube controls, browser sign-in, receiver IDs and pairings.
+- Support unprotected MPEG-2/H.264 broadcasts with AC-3/MPEG/AAC audio. Protected and ATSC 3.0 channels are marked unavailable.
+
 ## 0.1.14
 
 - Keep YouTube headers, recommendations, and comments outside the full-window video.

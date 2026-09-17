@@ -2,14 +2,21 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Doubletake Browser</title><link rel="stylesheet" href="static/style.css"></head>
 <body>
-<header><div class="brand"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 10V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2h-7M3 16a6 6 0 0 1 6 6M3 11a11 11 0 0 1 11 11"/><circle cx="3" cy="22" r="1"/></svg><div><h1>Doubletake Browser</h1><p>One browser. Your TVs.</p></div></div><span id="mqttState" class="badge">Connecting to Home Assistant</span></header>
+<header><div class="brand"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 10V5a2 2 0 0 1 2-2h18a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2h-7M3 16a6 6 0 0 1 6 6M3 11a11 11 0 0 1 11 11"/><circle cx="3" cy="22" r="1"/></svg><div><h1>Doubletake Browser</h1><p>One source. Your TVs.</p></div></div><span id="mqttState" class="badge">Connecting to Home Assistant</span></header>
 <main>
 <section class="card controls" aria-label="Choose a source and TVs">
 <div class="source-controls">
-<label>Source<select id="sourceChoice"><option value="page">Saved page</option><option value="video">YouTube video</option><option value="watch_later">Watch Later</option></select></label>
+<label>Source<select id="sourceChoice"><option value="page">Saved page</option><option value="hdhomerun">HDHomeRun channel</option><option value="video">YouTube video</option><option value="watch_later">Watch Later</option></select></label>
 <label id="savedPageField">Page<select id="pageChoice"><option value="">Add a page below</option></select></label>
 <label id="youtubeURLField" hidden>YouTube video URL<input id="youtubeURL" type="url" placeholder="https://www.youtube.com/watch?v=…" maxlength="4096" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
 <div id="watchLaterOptions" hidden><p id="watchLaterHelp" class="source-help">Uses the Google account signed in to this browser and your playlist order. Finished videos are skipped.</p><label class="check-option"><input id="youtubeResume" type="checkbox" checked aria-describedby="watchLaterResumeHelp">Include partly watched videos</label><p id="watchLaterResumeHelp" class="source-help">Unfinished videos resume from their saved position. Uncheck to play only videos with no watch progress.</p></div>
+<div id="channelFields" hidden>
+<div class="actions"><label>Find a channel<input id="channelSearch" type="search" placeholder="Number or name" autocomplete="off"></label><button id="findChannels" class="quiet">Find HDHomeRun</button></div>
+<label>Channel<select id="channelChoice"><option value="">Find your HDHomeRun first</option></select></label>
+<div class="actions"><label class="check-option"><input id="favoriteChannels" type="checkbox">Favorites only</label><button id="channelFavorite" class="quiet">☆ Favorite</button></div>
+<p id="channelHelp" class="source-help">Choose a channel, select TVs, then press Play channel. Changing this selection does not tune.</p>
+<details><summary>Enter HDHomeRun address</summary><div class="actions"><input id="channelHost" aria-label="HDHomeRun address" placeholder="192.168.1.100" maxlength="253"><button id="addHDHomeRun">Connect</button></div></details>
+</div>
 </div>
 <fieldset class="tv-selector"><legend>TVs</legend><div id="tvChoices" class="tv-choices"><span class="empty-choice">Add a TV below</span></div></fieldset>
 <div class="actions"><button id="openBrowser">Open browser</button><button id="cast" class="primary">Show on TVs</button><button id="stop" class="quiet">Stop all</button></div>
@@ -28,7 +35,7 @@
 <div class="card"><div class="sectionhead"><h2>Saved pages</h2><button id="addPage">+ Add page</button></div><div id="pages" class="items"></div></div>
 <div class="card"><div class="sectionhead"><h2>TVs</h2><div class="actions"><button id="discover" class="quiet">Find Apple TVs</button><button id="addTV">+ Add TV</button></div></div><div id="tvs" class="items"></div></div>
 </section>
-<footer><span id="version"></span><span>Each TV appears in Home Assistant with saved-page and YouTube controls, Stop, and status.</span></footer>
+<footer><span id="version"></span><span>Each TV appears in Home Assistant with page, YouTube and channel controls, Stop, and status.</span></footer>
 </main>
 <dialog id="editor"><form id="editForm"><div class="sectionhead"><h2 id="editTitle"></h2><button type="button" id="cancelEdit" class="quiet" aria-label="Close">✕</button></div><label>Name<input id="itemName" required maxlength="80" autocomplete="off"></label><label id="urlLabel">URL<input id="itemURL" type="url" placeholder="http://homeassistant.local:8123" maxlength="4096" autocomplete="off"></label><label id="hostLabel">IP address or hostname<input id="itemHost" maxlength="253" placeholder="192.168.1.100" autocomplete="off"></label><label id="portLabel">AirPlay port<input id="itemPort" type="number" min="1" max="65535" value="7000"></label><p id="editorError" class="formerror" role="alert"></p><div class="dialogactions"><button class="primary">Save</button></div></form></dialog>
 <dialog id="discovery"><div class="sectionhead"><h2>Apple TVs on your network</h2><button id="closeDiscovery" class="quiet" aria-label="Close">✕</button></div><div id="discovered" class="items"></div></dialog>

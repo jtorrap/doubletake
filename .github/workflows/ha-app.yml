@@ -1,7 +1,7 @@
 name: Home Assistant app
 on:
   push:
-    branches: [main, 'codex/ha-app']
+    branches: [main, 'codex/ha-app', 'codex/hdhomerun-playback']
     paths: ['app/**', '.github/workflows/ha-app.yml']
   pull_request:
     branches: [main]
@@ -126,11 +126,15 @@ jobs:
         run: docker run --rm --user 1000:1000 --entrypoint python3 -v "$PWD/app:/source:ro" doubletake-app -B -m unittest discover -s /source/tests -v
       - name: Prepare integration fixture
         run: |
-          go test ./cmd/doubletake-test-receiver ./internal/airplay -run 'TestReceiver|TestVideoStats|TestAudioStats|TestStreamAudioStats'
+          go test ./cmd/doubletake-test-receiver ./internal/airplay -run 'TestReceiver|TestVideoStats|TestAudioStats|TestStreamAudioStats|TestMedia|TestRTPL16|TestAudioRTPClock'
           go build -o bin/doubletake-test-receiver ./cmd/doubletake-test-receiver
           sudo apt-get update
           sudo apt-get install -y ffmpeg
           npm install --prefix /tmp/app-playwright playwright@1.58.2
+      - name: Direct channel media and shared tuner lifecycle
+        run: |
+          mkdir -p artifacts/app
+          docker run --rm --entrypoint /bin/sh -v "$PWD:/source:ro" doubletake-app -c 'apt-get update -qq && apt-get install -y --no-install-recommends ffmpeg >/dev/null && cp /source/bin/doubletake-test-receiver /usr/local/bin/ && su -s /bin/sh browser -c "DOUBLETAKE_LAUNCHER=/opt/doubletake/launcher.py python3 -B /source/app/tests/channel_runtime.py"' | tee artifacts/app/channel-runtime.log
       - name: Multiple-TV controls and responsive layout
         run: node app/tests/multi_tv_ui.cjs artifacts/app/ui
       - name: YouTube playback and ordered queue fixtures

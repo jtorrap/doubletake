@@ -48,7 +48,12 @@ function options(select, values, empty) {
 function controls() {
   const ready = state?.runtime.browser === 'ready';
   const source = $('sourceChoice').value;
-  const canOpen = source === 'page' ? !!$('pageChoice').value : source === 'video' ? !!$('youtubeURL').value.trim() : source === 'watch_later';
+  const canOpen = source === 'hdhomerun' ? !!$('channelChoice').value : source === 'page' ? !!$('pageChoice').value : source === 'video' ? !!$('youtubeURL').value.trim() : source === 'watch_later';
+  $('channelFields').hidden = source !== 'hdhomerun';
+  $('openBrowser').hidden = source === 'hdhomerun';
+  $('cast').textContent = source === 'hdhomerun' ? 'Play channel' : 'Show on TVs';
+  $('channelChoice').disabled = $('channelSearch').disabled = $('findChannels').disabled = $('addHDHomeRun').disabled = busy;
+  $('channelFavorite').disabled = busy || !$('channelChoice').value;
   $('savedPageField').hidden = source !== 'page';
   $('youtubeURLField').hidden = source !== 'video';
   $('watchLaterOptions').hidden = source !== 'watch_later';
@@ -63,11 +68,11 @@ function controls() {
   $('pausePreview').disabled = !ready;
   $('pausePreview').textContent = previewPaused ? 'Resume preview' : 'Pause preview';
   $('pasteText').disabled = busy || !ready || !rfb;
-  $('checkVideo').disabled = busy || !ready;
+  $('checkVideo').disabled = busy || !(ready || state?.runtime.source_kind === 'hdhomerun' && Object.keys(receivers()).length);
   document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
   document.querySelectorAll('[data-receiver-action], #tvChoices input').forEach(control => control.disabled = busy);
   const changed = !sameSelection(Object.keys(receivers()));
-  const shared = state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
+  const shared = source === 'hdhomerun' ? 'All selected TVs share this channel. Play channel applies your selection.' : state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
   $('selectionHint').textContent = changed && Object.keys(receivers()).length ?
     `Selection changed. Show on TVs applies this set and disconnects unchecked TVs. ${shared}` :
     `${shared} Apply your selection with Show on TVs.`;
@@ -89,6 +94,10 @@ function launchSource(onTVs) {
   if (mode === 'page') {
     path = onTVs ? 'api/action/cast' : 'api/action/open';
     body = {page_id:$('pageChoice').value};
+  } else if (mode === 'hdhomerun') {
+    if (!onTVs || !$('channelChoice').value) return;
+    const [device_id, channel] = $('channelChoice').value.split(':');
+    path = 'api/action/channel'; body = {device_id, channel};
   } else {
     if (mode === 'video' && !$('youtubeURL').reportValidity()) return;
     path = 'api/action/youtube';
@@ -196,13 +205,14 @@ async function refresh() {
   state = await api('api/state', undefined, 'GET'); csrf = state.csrf;
   if (!sourceInitialized) {
     sourceInitialized = true;
+    if (state.runtime.source_kind === 'hdhomerun') $('sourceChoice').value = 'hdhomerun';
     if (['video','watch_later'].includes(state.runtime.youtube?.mode)) $('sourceChoice').value = state.runtime.youtube.mode;
   }
   options($('pageChoice'),state.pages,'Add a page below');
   if (!pageSelectionDirty && state.pages.some(item => item.id === state.runtime.page_id)) $('pageChoice').value = state.runtime.page_id;
   selectedTVs = new Set([...selectedTVs].filter(id => state.tvs.some(tv => tv.id === id)));
   if (!selectionDirty) selectedTVs = new Set(Object.keys(receivers()).filter(id => state.tvs.some(tv => tv.id === id)));
-  renderTVChoices(); renderReceivers();
+  renderChannels(); renderTVChoices(); renderReceivers();
   renderItems('pages'); renderItems('tvs');
   $('version').textContent = `Doubletake Browser ${state.version} · ${state.runtime.control_mode==='native'?'Standard browser':'Diagnostic browser'}`;
   const display = state.runtime.display;
@@ -221,9 +231,12 @@ async function refresh() {
   $('previewLabel').textContent=sourceLabel||'Browser preview';
   renderYouTubeStatus(current);
   $('previewEmpty').hidden=current.browser==='ready';
+  const channelMode = current.source_kind === 'hdhomerun';
+  $('previewEmpty').querySelector('h2').textContent = channelMode ? sourceLabel || 'HDHomeRun' : 'Your browser appears here';
+  $('previewEmpty').querySelector('p').textContent = channelMode ? 'Channel video and sound play directly on the selected TVs. ' + (current.channel?.state === 'stopped' ? 'Playback stopped; the tuner is released.' : 'Check the TV connections above for status.') : 'Use your mouse and keyboard to sign in and interact. Your browser profile is saved between sessions.';
   if (current.browser==='ready' && !previewPaused && !rfb && !connecting) connectPreview();
   if (current.browser!=='ready' && rfb) { rfb.disconnect(); rfb=null; $('screen').replaceChildren(); }
-  if (current.browser!=='ready') $('previewState').textContent=labels[current.browser]||current.browser;
+  if (current.browser!=='ready') $('previewState').textContent=channelMode ? 'HDHomeRun · ' + (current.channel?.state || 'stopped') : labels[current.browser]||current.browser;
   controls();
 }
 async function connectPreview() {
@@ -267,7 +280,7 @@ $('editForm').addEventListener('submit',async event=>{
 });
 $('cancelEdit').onclick=()=>$('editor').close();
 $('addPage').onclick=()=>edit('pages'); $('addTV').onclick=()=>edit('tvs');
-$('sourceChoice').onchange=()=>{sourceInitialized=true;controls();};
+$('sourceChoice').onchange=()=>{sourceInitialized=true;controls();if($('sourceChoice').value==='hdhomerun'&&!state?.channels?.devices?.length) findChannels();};
 $('youtubeURL').oninput=controls;
 $('pageChoice').onchange=()=>{pageSelectionDirty=true;controls();};
 $('openBrowser').onclick=()=>launchSource(false);
@@ -333,6 +346,11 @@ $('checkVideo').onclick=()=>run(async()=>{
   $('videoDialog').showModal();
   try {
     const result=await api('api/diagnostics',{});
+    if (result.source_kind === 'hdhomerun') {
+      $('videoScope').textContent = 'One tuner feeds the selected TVs. Audio is encoded for each receiver. Confirm picture and sound on the TVs.';
+      $('videoSummary').textContent = `${result.tuner_connections} tuner connection · ${result.encoder_count} shared video encoder(s)`;
+      $('videoDetails').textContent=JSON.stringify(result,null,2); return;
+    }
     $('videoScope').textContent=result.browser_inspection_available?'Browser video details are available.':
       'GPU activity includes browser decoding and TV encoding. Sender measurements count encoded frames; they do not measure frames displayed by the TV.';
     $('videoSummary').textContent=result.video_engine_active?'GPU video engine active':
@@ -343,5 +361,33 @@ $('checkVideo').onclick=()=>run(async()=>{
     $('videoDetails').textContent=JSON.stringify(result,null,2);
   } catch (error) { $('videoSummary').textContent='Video check unavailable. Try again.'; throw error; }
 });
+function renderChannels() {
+  const catalog = state?.channels || {devices:[],favorites:[]};
+  const current = $('channelChoice').value || (state?.runtime.channel ? `${state.runtime.channel.device_id}:${state.runtime.channel.number}` : '');
+  const query = $('channelSearch').value.trim().toLowerCase();
+  const favoriteOnly = $('favoriteChannels').checked;
+  const values = catalog.devices.flatMap(device => device.channels.map(channel => ({...channel, device,
+    key:device.id+':'+channel.number}))).filter(channel =>
+      (!favoriteOnly || catalog.favorites.includes(channel.key)) && `${channel.number} ${channel.name}`.toLowerCase().includes(query));
+  $('channelChoice').replaceChildren();
+  if (!values.length) $('channelChoice').add(new Option(catalog.devices.length?'No matching channels':'Find your HDHomeRun first',''));
+  for (const channel of values) {
+    const label = `${catalog.favorites.includes(channel.key)?'★ ':''}${channel.number} ${channel.name}${catalog.devices.length>1?' · '+channel.device.id:''}${channel.supported?'':' · '+channel.reason}`;
+    const option = new Option(label,channel.key); option.disabled = !channel.supported; $('channelChoice').add(option);
+  }
+  if (values.some(channel => channel.key === current && channel.supported)) $('channelChoice').value = current;
+  else $('channelChoice').value = values.find(channel => channel.supported)?.key || '';
+  $('channelFavorite').textContent = catalog.favorites.includes($('channelChoice').value) ? '★ Favorite' : '☆ Favorite';
+}
+function findChannels(host) { return run(async()=>{await api('api/channels/discover',host?{host}:{});}); }
+$('findChannels').onclick=()=>findChannels();
+$('addHDHomeRun').onclick=()=>findChannels($('channelHost').value.trim());
+$('channelSearch').oninput=$('favoriteChannels').onchange=()=>{renderChannels();controls();};
+$('channelChoice').onchange=()=>{renderChannels();controls();};
+$('channelFavorite').onclick=()=>run(async()=>{
+  const key=$('channelChoice').value, [device_id,channel]=key.split(':');
+  await api('api/channels/favorite',{device_id,channel,enabled:!state.channels.favorites.includes(key)});
+});
+
 async function poll(){try{await refresh();}catch{showError('The app connection is unavailable. Retrying…');}setTimeout(poll,2000);}
 poll();
