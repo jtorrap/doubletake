@@ -15,7 +15,7 @@ from model import Store, VERSION
 from session import Session
 from mqtt_bridge import MQTTBridge
 from youtube import launch as youtube_launch
-from hdhomerun import ChannelCatalog
+from hdhomerun import ChannelCatalog, ChannelError
 
 
 async def discover_tvs():
@@ -87,6 +87,8 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
             raise web.HTTPForbidden(text="Refresh the app interface and try again")
         try:
             response = await handler(request)
+        except ChannelError as error:
+            return web.json_response({"error": error.safe_message}, status=409)
         except (ValueError, KeyError, TypeError):
             # Return only our own validation messages; JSON parsing and
             # missing-key errors can contain private user input.

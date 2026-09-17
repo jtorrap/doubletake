@@ -21,6 +21,21 @@ DEVICE = re.compile(r'^[0-9A-F]{8}$')
 CHANNEL = re.compile(r'^[0-9]{1,5}(?:\.[0-9]{1,3})?$')
 
 
+class ChannelError(ValueError):
+    messages = {
+        'busy': 'All HDHomeRun tuners are in use. Stop another stream and try again.',
+        'no_media': 'The HDHomeRun received no video for this channel. Try another channel or check reception.',
+        'protected': 'This channel requires content protection and cannot play here.',
+        'unknown': 'The HDHomeRun no longer has this channel. Refresh the lineup.',
+        'stream': 'Channel playback could not continue. Check reception and try again.',
+        'startup': 'The HDHomeRun channel could not start. Check the device and try again.',
+    }
+    def __init__(self, code='startup'):
+        self.code = code if code in self.messages else 'startup'
+        self.safe_message = self.messages[self.code]
+        super().__init__(self.safe_message)
+
+
 def local_ipv4(value):
     address = ipaddress.ip_address(value)
     if address.version != 4 or not address.is_private or address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast:

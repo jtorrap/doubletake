@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 from aiohttp.test_utils import TestClient, TestServer
-from hdhomerun import ChannelCatalog, normalize_device, local_ipv4, valid_reply, discovery_packet, fetch_device
+from hdhomerun import ChannelCatalog, normalize_device, local_ipv4, valid_reply, discovery_packet, fetch_device, ChannelError
 from model import Store, discovery
 from mqtt_bridge import MQTTBridge
 from server import create_app
@@ -159,7 +159,7 @@ class ChannelLifecycle(unittest.IsolatedAsyncioTestCase):
             await session.adopt_channel(SOURCE)
         session.close_worker.assert_not_awaited()
         self.assertEqual(session.runtime['source_label'],'Original')
-        session.prepare_channel = AsyncMock(side_effect=[ValueError('busy'), ValueError('channel_unavailable')])
+        session.prepare_channel = AsyncMock(side_effect=[ChannelError('busy'), ValueError('channel_unavailable')])
         with self.assertRaises(ValueError):
             await session.adopt_channel(SOURCE)
         session.close_worker.assert_awaited_once()

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import time
+from hdhomerun import ChannelError
 
 
 class MediaPipeline:
@@ -198,14 +199,27 @@ class MediaPipeline:
     def health(self):
         if not self.pipeline:
             return None
-        message = self.pipeline.get_bus().pop_filtered(self.Gst.MessageType.ERROR | self.Gst.MessageType.EOS)
-        if message:
-            if message.type == self.Gst.MessageType.ERROR:
-                error, _debug = message.parse_error()
-                self.error_code = 'busy' if 'Service Unavailable' in error.message else 'stream'
-            self.error = 'Channel stream ended. Check tuner availability and reception, then press Play again.'
-        elif time.monotonic() - (self.last_video or self.started) > 15:
-            self.error = 'No channel video arrived. Check tuner availability and reception, then press Play again.'
+        bus = self.pipeline.get_bus()
+        types = self.Gst.MessageType.ERROR | self.Gst.MessageType.EOS | self.Gst.MessageType.ELEMENT
+        while message := bus.pop_filtered(types):
+            if message.type == self.Gst.MessageType.ELEMENT:
+                structure = message.get_structure()
+                if structure and structure.get_name() == 'http-headers':
+                    headers = structure.get_value('response-headers')
+                    if headers:
+                        for index in range(headers.n_fields()):
+                            field = headers.nth_field_name(index)
+                            if field.lower() == 'x-hdhomerun-error':
+                                code = (headers.get_string(field) or '')[:3]
+                                self.error_code = {'805':'busy','804':'busy','807':'no_media',
+                                                   '811':'protected','801':'unknown'}.get(code,'stream')
+                                self.error = ChannelError(self.error_code).safe_message
+            else:
+                self.error_code = self.error_code or 'stream'
+                self.error = ChannelError(self.error_code).safe_message
+        if not self.error and time.monotonic() - (self.last_video or self.started) > 15:
+            self.error_code = 'no_media'
+            self.error = ChannelError(self.error_code).safe_message
         return self.error
 
     async def close(self):

@@ -19,6 +19,7 @@ from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'service'))
 from media_worker import MediaWorker
+from media_pipeline import MediaPipeline
 from fullscreen_motion import analyze_capture, frame_count
 
 
@@ -44,6 +45,9 @@ async def main():
         filters = ['drawbox=x=0:y=0:w=640:h=96:color=black:t=fill', 'drawbox=x=16:y=24:w=24:h=48:color=white:t=fill']
         filters += [f"drawbox=x={64+40*bit}:y=24:w=24:h=48:color=white:t=fill:enable='bitand(n,{1<<bit})'" for bit in range(12)]
         async def stream(request):
+            if request.match_info['channel'] in ('805', '807'):
+                code = request.match_info['channel']
+                return web.Response(status=503, headers={'X-HDHomeRun-Error': code + ' Fixture error'})
             response = web.StreamResponse(headers={'Content-Type':'video/mp2t'})
             await response.prepare(request)
             process = await asyncio.create_subprocess_exec('ffmpeg', '-hide_banner', '-loglevel', 'error',
@@ -74,6 +78,19 @@ async def main():
         await web.TCPSite(runner, '127.0.0.1', source_port).start()
         workers, receivers, handles, logs = [], [], [], []
         try:
+            # A 503 alone does not mean tuner exhaustion. Only the tuner's
+            # specific busy response may release our current stream to retry.
+            for code, expected in [('805', 'busy'), ('807', 'no_media')]:
+                failed = MediaPipeline(f'http://127.0.0.1:{source_port}/auto/v{code}',
+                                       {'width':1920,'height':1080,'fps':30,'bitrate':8000})
+                try:
+                    try:
+                        await failed.prepare()
+                        raise AssertionError('Unavailable channel unexpectedly started')
+                    except ValueError:
+                        assert failed.error_code == expected, (code, failed.error_code)
+                finally:
+                    await failed.close()
             ports = [free_port(), free_port(), free_port()]
             for index, profile in enumerate(('uxplay', 'uxplay', 'airserver')):
                 log = work / f'receiver{index}.log'
@@ -128,7 +145,7 @@ async def main():
             await worker.command({'action':'stop','tv_id':targets[0]['id']})
             await until(lambda: packets(1,'video_frames') > before + 60, 10, 'independent Stop')
             assert len(requests) == 1
-            result = {'one_tuner_connection':True, 'shared_encoder':True, 'late_join_preserved_first':True,
+            result = {'tuner_error_classification':True, 'one_tuner_connection':True, 'shared_encoder':True, 'late_join_preserved_first':True,
                       'independent_stop':True, 'motion':motion, 'different_canvas_same_tuner':True, 'video_frames':[packets(i,'video_frames') for i in range(3)],
                       'audio_rtp':[packets(i,'audio_rtp') for i in range(3)]}
             await worker.close()

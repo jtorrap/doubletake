@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from model import atomic_json, browser_text
+from hdhomerun import ChannelError
 from performance import video_stats, audio_stats
 from youtube import launch as youtube_launch, WATCH_LATER_URL
 
@@ -113,7 +114,7 @@ class Session:
                     if not self.ready.done():
                         self.ready.set_result(True)
                 elif value.get("type") == "channel":
-                    self.update(channel={**(self.runtime.get("channel") or {}), "state": "error"}, error="Channel playback ended. Check tuner availability and reception, then press Play again.")
+                    self.update(channel={**(self.runtime.get("channel") or {}), "state": "error"}, error=ChannelError(value.get("code")).safe_message)
                 elif value.get("type") == "reply":
                     future = self.pending.pop(value.get("id"), None)
                     if future and not future.done():
@@ -312,7 +313,7 @@ class Session:
         try:
             event = json.loads(await asyncio.wait_for(process.stdout.readline(), 20))
             if event.get('type') != 'ready' or event.get('media') is not True:
-                raise ValueError('busy' if event.get('code') == 'busy' else 'channel_unavailable')
+                raise ChannelError(event.get('code'))
             return process
         except BaseException:
             if process.returncode is None:
@@ -334,8 +335,8 @@ class Session:
         try:
             candidate = await self.prepare_channel(source)
         except ValueError as error:
-            if str(error) != 'busy' or self.runtime.get('source_kind') != 'hdhomerun':
-                raise ValueError('The channel is unavailable; current playback is unchanged') from None
+            if not isinstance(error, ChannelError) or error.code != 'busy' or self.runtime.get('source_kind') != 'hdhomerun':
+                raise
             # No spare tuner: release only our previous input, then try once.
             await self.close_worker()
             self.set_receivers({})

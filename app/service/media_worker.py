@@ -71,7 +71,7 @@ class MediaWorker(Worker):
     async def monitor(self):
         while not self.stop_event.is_set():
             if self.channel.health():
-                emit('channel', state='error', error=self.channel.error)
+                emit('channel', state='error', code=self.channel.error_code)
                 self.stop_event.set()
                 return
             for tv_id, entry in list(self.senders.items()):
