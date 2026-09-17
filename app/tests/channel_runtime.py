@@ -114,6 +114,12 @@ async def main():
                 original_line(tv_id, entry, value)
             worker.sender_line = line
             await worker.start(work)
+            # The original fixture delivered samples about 90 ms old; live
+            # tsdemux delivers them about 700 ms old. Delay delivery by 600 ms
+            # without touching the encoded A/V timestamps. This must exercise
+            # real stale-frame decisions in each receiver's audio path.
+            publish = worker.channel.publish
+            worker.channel.publish = lambda key, data: worker.channel.loop.call_later(.6, publish, key, data)
             targets = [{'id':str(i+1)*16,'host':'127.0.0.1','port':p} for i,p in enumerate(ports)]
             def packets(index, field):
                 values = re.findall(r'\b' + field + r'=(\d+)', logs[index].read_text())
@@ -141,11 +147,15 @@ async def main():
             await until(lambda: packets(2,'video_frames') > 60 and packets(2,'audio_rtp') > 100, 20, 'smaller AAC-ELD TV')
             assert len(worker.channel.branches) == 2 and len(requests) == 1
             assert all(entry.get('audio') == 'active' for entry in worker.senders.values())
+            await until(lambda: all(entry.get('audio_performance', {}).get('sent_frames', 0) > 100
+                                    for entry in worker.senders.values()), 15, 'all audio profiles with broadcast delay')
+            assert all(entry['audio_performance']['stale_dropped'] == 0 for entry in worker.senders.values())
+            assert all(entry['audio_performance']['capture_age_mean_ms'] > 500 for entry in worker.senders.values())
             before = packets(1,'video_frames')
             await worker.command({'action':'stop','tv_id':targets[0]['id']})
             await until(lambda: packets(1,'video_frames') > before + 60, 10, 'independent Stop')
             assert len(requests) == 1
-            result = {'tuner_error_classification':True, 'one_tuner_connection':True, 'shared_encoder':True, 'late_join_preserved_first':True,
+            result = {'broadcast_delay_audio':True, 'tuner_error_classification':True, 'one_tuner_connection':True, 'shared_encoder':True, 'late_join_preserved_first':True,
                       'independent_stop':True, 'motion':motion, 'different_canvas_same_tuner':True, 'video_frames':[packets(i,'video_frames') for i in range(3)],
                       'audio_rtp':[packets(i,'audio_rtp') for i in range(3)]}
             await worker.close()

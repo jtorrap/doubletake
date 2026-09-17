@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Allow for live broadcast demuxing delay with a shared one-second audio/video presentation target.
+- Keep the channel worker alive until the final TV's Stop command is acknowledged.
+- Include safe per-TV audio/video measurements and audio failure categories in Check video.
+
 ## 0.2.0
 
 - Select an HDHomeRun channel and play it on the selected TVs from the same UI.

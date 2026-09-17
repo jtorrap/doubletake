@@ -375,6 +375,9 @@ class Worker:
         audio = None
         if 'warning: audio capture failed:' in line or 'audio streaming error:' in line:
             audio = 'error'
+            entry['audio_error_code'] = ('capture_late' if 'audio capture cannot meet ' in line else
+                                         'capture_failed' if 'warning: audio capture failed:' in line else
+                                         'stream_failed')
         elif 'audio disabled (receiver did not provide audio ports)' in line:
             audio = 'unavailable'
         elif 'audio capture started' in line and entry.get('audio') != 'error':

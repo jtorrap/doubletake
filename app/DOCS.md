@@ -309,7 +309,7 @@ with stereo PCM encoded as each receiver's negotiated ALAC or AAC-ELD. It uses
 30 fps at the configured 1080p or 720p size and preserves source timestamps.
 Bookworm's hardware encoder rewrites timestamps, so this initial channel path
 uses software encoding; browser hardware settings retain their current behavior.
-Automatic channel buffering is 350 ms for the shared audio/video presentation
+Automatic channel buffering is 1000 ms for the shared audio/video presentation
 lead; the app's explicit target-latency setting overrides it. This excludes
 broadcast and initial tuning delay. Select 720p_30 if host load is excessive.
 

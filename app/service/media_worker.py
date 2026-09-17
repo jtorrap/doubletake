@@ -20,6 +20,7 @@ class MediaWorker(Worker):
         super().__init__(config)
         self.channel = None
         self.had_sender = False
+        self.control_in_flight = 0
         self.encoder = 'none'
         self.audio = os.environ.get('DOUBLETAKE_AUDIO', 'true') == 'true'
 
@@ -31,6 +32,15 @@ class MediaWorker(Worker):
         emit('ready', media=True)
 
     async def command(self, value, *, retry_generation=None):
+        # Stop removes the last sender before its process has finished exiting.
+        # Keep the worker alive until commands() can acknowledge that operation.
+        self.control_in_flight += 1
+        try:
+            return await self.channel_command(value)
+        finally:
+            self.control_in_flight -= 1
+
+    async def channel_command(self, value):
         action = value['action']
         if action == 'cast':
             receiver = value['receiver']
@@ -47,9 +57,9 @@ class MediaWorker(Worker):
                        '-creds', str(directory / 'airplay-credentials.json'), '-media-socket', self.media_socket]
             if not self.audio:
                 command.append('-no-audio')
-            # Broadcast demux/deinterlace adds delay beyond screen capture. Apply
-            # the same presentation lead to audio and video, preserving PTS.
-            command += ['-target-latency-ms', str(self.target_latency_ms or 350)]
+            # tsdemux buffers live broadcasts for about 700 ms. Leave headroom
+            # for decoding and transport without changing either source clock.
+            command += ['-target-latency-ms', str(self.target_latency_ms or 1000)]
             process = subprocess.Popen(command, env=self.environment, stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
             entry = {'process': process, 'buffer': '', 'state': 'starting', 'encoder': 'none',
@@ -63,7 +73,10 @@ class MediaWorker(Worker):
             return {'source_kind': 'hdhomerun', 'receiver_count': len(self.senders),
                     'tuner_connections': int(self.channel.pipeline is not None),
                     'encoder_count': len(self.channel.branches), 'video_encoder': 'none',
-                    'display': self.config['quality'], 'error': self.channel.error}
+                    'display': self.config['quality'], 'error': self.channel.error,
+                    'receivers': {tv_id: {key: entry[key] for key in
+                                  ('state', 'audio', 'audio_error_code', 'performance', 'audio_performance')
+                                  if key in entry} for tv_id, entry in self.senders.items()}}
         if action not in {'pin', 'stop', 'close'}:
             raise ValueError('Browser controls are unavailable during channel playback')
         return await super().command(value)
@@ -81,7 +94,7 @@ class MediaWorker(Worker):
                     # A receiver ending playback must never be reclaimed.
                     if self.sender_desired(tv_id, generation):
                         emit('airplay', tv_id=tv_id, state='error')
-            if not self.senders and (self.had_sender or time.monotonic() - self.channel.started > 50):
+            if not self.control_in_flight and not self.senders and (self.had_sender or time.monotonic() - self.channel.started > 50):
                 self.stop_event.set()
             await asyncio.sleep(0.25)
 
