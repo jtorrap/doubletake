@@ -376,11 +376,15 @@ class Session:
                     source_label=source['label'], error=None)
         self.reader_task = asyncio.create_task(self.read_events(candidate))
 
-    async def channel(self, source, receivers, *, replace_receivers=True):
+    async def channel(self, source, receivers, *, replace_receivers=True, generation=None):
         """Play one resolved channel on the exact UI set or add MQTT receivers."""
         if not receivers:
             raise ValueError('Select at least one TV')
+        if generation is None:
+            generation = self.channel_generation
         async with self.lock:
+            if generation != self.channel_generation:
+                raise ChannelError('cancelled')
             desired = {r['id']: r for r in receivers}
             if not replace_receivers:
                 desired = {**self.receiver_configs, **desired}

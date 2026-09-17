@@ -15,6 +15,7 @@ const outputDir = process.argv[2];
   const page = await browser.newPage({viewport: {width:745, height:1000}, colorScheme:'dark'});
   const errors = [], actions = [];
   let stateReads = 0;
+  let channelGate = null;
   const fixture = {
     version:'test', csrf:'synthetic-csrf', mqtt_connected:true,
     channels:{version:1,devices:[{id:'10ABCDEF',name:'HDHomeRun',channels:[{number:'2.1',name:'Test HD',supported:true},{number:'4.1',name:'Second',supported:true},{number:'102.1',name:'ATSC 3',supported:false,reason:'ATSC 3.0 is not supported yet'}]}],favorites:[]},
@@ -47,10 +48,16 @@ const outputDir = process.argv[2];
         fixture.runtime.youtube = {mode:body.mode,state:'loading'};
         if (body.tv_ids) fixture.runtime.receivers = Object.fromEntries(body.tv_ids.map(id => [id,fixture.runtime.receivers[id] || {state:'starting',error:null,audio:'starting'}]));
       } else if (action === 'channel') {
+        const gate = channelGate;
+        if (gate) {
+          await gate.ready;
+          if (gate.cancelled) return route.fulfill({status:409,json:{error:'Channel launch cancelled'}});
+        }
         fixture.runtime.browser='closed'; fixture.runtime.source_kind='hdhomerun'; fixture.runtime.youtube=null;
         fixture.runtime.channel={device_id:body.device_id,number:body.channel,state:'playing'}; fixture.runtime.source_label='2.1 Test HD';
         fixture.runtime.receivers=Object.fromEntries(body.tv_ids.map(id=>[id,{state:'sending',audio:'active'}]));
       } else if (action === 'stop') {
+        if (channelGate) { channelGate.cancelled=true; channelGate.release(); }
         if (body.tv_id) delete fixture.runtime.receivers[body.tv_id]; else fixture.runtime.receivers = {};
       } else if (action === 'pin') fixture.runtime.receivers[body.tv_id] = {state:'sending',error:null,audio:'active'};
       return route.fulfill({json:{ok:true}});
@@ -225,6 +232,26 @@ const outputDir = process.argv[2];
     await noOverflow();
     if(outputDir) await page.screenshot({path:path.join(outputDir,'channel-390.png'),fullPage:true});
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true,youtube_drafts_and_focus:true,youtube_payloads:true,youtube_status_separate:true,watch_later_resume_default:true,saved_page_unchanged:true,initial_youtube_source:true}));
+    // Stop remains available both when switching and on the first tune with
+    // no active receivers. The cancelled response must not restore selection
+    // or show a spurious failure after Stop has completed.
+    for (let attempt=0;attempt<2;attempt++) {
+      await page.getByRole('checkbox',{name:'Cart',exact:true}).check();
+      channelGate={cancelled:false};
+      channelGate.ready=new Promise(resolve=>channelGate.release=resolve);
+      const before=actions.length;
+      await page.getByRole('button',{name:'Play channel',exact:true}).click();
+      await page.waitForFunction(() => document.querySelector('#cast').disabled);
+      assert.equal(await page.getByRole('button',{name:'Stop all',exact:true}).isEnabled(),true,'Tuning disabled Stop');
+      await page.getByRole('button',{name:'Stop all',exact:true}).click();
+      await page.waitForFunction(() => !document.querySelector('#sourceChoice').disabled);
+      assert.deepEqual(actions.slice(before).map(item=>item.action),['channel','stop']);
+      assert.equal(await page.locator('#error').isVisible(),false,'Cancelled tuning showed a late error');
+      assert.equal(await page.getByRole('checkbox',{name:'Cart',exact:true}).isChecked(),false);
+      assert.equal(await page.getByRole('button',{name:'Stop all',exact:true}).isEnabled(),false);
+      assert.deepEqual(fixture.runtime.receivers,{});
+      channelGate=null;
+    }
+    console.log(JSON.stringify({initial_live_selection:true,poll_retains_edits:true,explicit_receiver_set:true,targeted_pin_and_stop:true,stop_all:true,cancel_pending_channel:true,per_tv_errors:true,per_tv_audio_failure:true,responsive_widths:[745,390],audio_switch_display:true,password_dialog_retained:true,youtube_drafts_and_focus:true,youtube_payloads:true,youtube_status_separate:true,watch_later_resume_default:true,saved_page_unchanged:true,initial_youtube_source:true}));
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

@@ -3,6 +3,8 @@
 ## 0.2.2
 
 - Correct the version reported in the UI and Home Assistant device discovery.
+- Keep Stop all available during channel tuning and ignore cancelled launch replies.
+- Cancel launches still refreshing the lineup or waiting for the shared source lock.
 
 ## 0.2.1
 

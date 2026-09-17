@@ -129,6 +129,19 @@ class ChannelSession(Session):
 
 
 class ChannelLifecycle(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_cancels_play_waiting_for_source_lock(self):
+        session = ChannelSession('/unused', {})
+        async with session.lock:
+            playback = asyncio.create_task(session.channel(SOURCE, [TV1]))
+            await asyncio.sleep(0)
+            stop = asyncio.create_task(session.stop())
+            await asyncio.sleep(0)
+        with self.assertRaises(ChannelError):
+            await playback
+        await stop
+        self.assertEqual(session.starts, 0)
+        self.assertEqual(session.runtime['receivers'], {})
+
     async def test_stop_during_tuning_prevents_late_tv_takeover(self):
         session = Session('/unused',{})
         warming, release = asyncio.Event(), asyncio.Event()
@@ -222,6 +235,23 @@ class ChannelAPI(unittest.IsolatedAsyncioTestCase):
         state = await (await self.client.get('/api/state')).json()
         self.assertNotIn('/auto/v',json.dumps(state))
         self.assertNotIn('PRIVATE-FIXTURE',json.dumps(state))
+
+    async def test_stop_cancels_play_still_resolving_lineup(self):
+        self.client.session.headers['X-Doubletake-CSRF'] = self.app['csrf']
+        resolving, release = asyncio.Event(), asyncio.Event()
+        async def source(*_args):
+            resolving.set()
+            await release.wait()
+            return SOURCE
+        with patch.object(self.app['channels'], 'source', side_effect=source):
+            playback = asyncio.ensure_future(self.client.post('/api/action/channel', json={
+                'device_id':DEVICE, 'channel':'2.1', 'tv_ids':[self.tv['id']]}))
+            await resolving.wait()
+            self.assertEqual((await self.client.post('/api/action/stop', json={})).status, 200)
+            release.set()
+            self.assertEqual((await playback).status, 409)
+        self.assertEqual(self.app['session'].starts, 0)
+        self.assertEqual(self.app['session'].runtime['receivers'], {})
 
     async def test_retained_channel_and_selection_commands_are_ignored(self):
         accepted = []

@@ -2,6 +2,7 @@ import RFB from '../novnc/core/rfb.js';
 
 const $ = id => document.getElementById(id);
 let state = null, csrf = '', busy = false, rfb = null, connecting = false;
+let pendingChannel = null, stoppingChannel = false;
 let editing = null, removing = null, pairingTV = null;
 let previewPaused = false;
 let sourceInitialized = false;
@@ -32,7 +33,7 @@ async function api(path, body, method='POST') {
 }
 function showError(message) { $('error').textContent = message || ''; $('error').hidden = !message; }
 async function run(operation) {
-  if (busy) return;
+  if (busy || stoppingChannel) return;
   busy = true; showError(''); controls();
   try { await operation(); await refresh(); }
   catch (error) { showError(error.message); }
@@ -46,31 +47,32 @@ function options(select, values, empty) {
   if (values.some(item => item.id === selected)) select.value = selected;
 }
 function controls() {
+  const blocked = busy || stoppingChannel;
   const ready = state?.runtime.browser === 'ready';
   const source = $('sourceChoice').value;
   const canOpen = source === 'hdhomerun' ? !!$('channelChoice').value : source === 'page' ? !!$('pageChoice').value : source === 'video' ? !!$('youtubeURL').value.trim() : source === 'watch_later';
   $('channelFields').hidden = source !== 'hdhomerun';
   $('openBrowser').hidden = source === 'hdhomerun';
   $('cast').textContent = source === 'hdhomerun' ? 'Play channel' : 'Show on TVs';
-  $('channelChoice').disabled = $('channelSearch').disabled = $('findChannels').disabled = $('addHDHomeRun').disabled = busy;
-  $('channelFavorite').disabled = busy || !$('channelChoice').value;
+  $('channelChoice').disabled = $('channelSearch').disabled = $('findChannels').disabled = $('addHDHomeRun').disabled = blocked;
+  $('channelFavorite').disabled = blocked || !$('channelChoice').value;
   $('savedPageField').hidden = source !== 'page';
   $('youtubeURLField').hidden = source !== 'video';
   $('watchLaterOptions').hidden = source !== 'watch_later';
   $('youtubeURL').required = source === 'video';
-  $('sourceChoice').disabled = $('youtubeURL').disabled = $('youtubeResume').disabled = busy;
-  $('pageChoice').disabled = busy;
-  $('openBrowser').disabled = busy || !canOpen;
-  $('cast').disabled = busy || !canOpen || !selectedTVs.size;
-  $('stop').disabled = busy || !Object.keys(receivers()).length;
-  $('closeBrowser').disabled = busy || !ready;
+  $('sourceChoice').disabled = $('youtubeURL').disabled = $('youtubeResume').disabled = blocked;
+  $('pageChoice').disabled = blocked;
+  $('openBrowser').disabled = blocked || !canOpen;
+  $('cast').disabled = blocked || !canOpen || !selectedTVs.size;
+  $('stop').disabled = stoppingChannel || (!pendingChannel && (busy || !Object.keys(receivers()).length));
+  $('closeBrowser').disabled = blocked || !ready;
   $('fullscreen').disabled = !ready;
   $('pausePreview').disabled = !ready;
   $('pausePreview').textContent = previewPaused ? 'Resume preview' : 'Pause preview';
-  $('pasteText').disabled = busy || !ready || !rfb;
-  $('checkVideo').disabled = busy || !(ready || state?.runtime.source_kind === 'hdhomerun' && Object.keys(receivers()).length);
-  document.querySelectorAll('[data-browser]').forEach(button => button.disabled = busy || !ready);
-  document.querySelectorAll('[data-receiver-action], #tvChoices input').forEach(control => control.disabled = busy);
+  $('pasteText').disabled = blocked || !ready || !rfb;
+  $('checkVideo').disabled = blocked || !(ready || state?.runtime.source_kind === 'hdhomerun' && Object.keys(receivers()).length);
+  document.querySelectorAll('[data-browser]').forEach(button => button.disabled = blocked || !ready);
+  document.querySelectorAll('[data-receiver-action], #tvChoices input').forEach(control => control.disabled = blocked);
   const changed = !sameSelection(Object.keys(receivers()));
   const playLabel = source === 'hdhomerun' ? 'Play channel' : 'Show on TVs';
   const shared = source === 'hdhomerun' ? 'All selected TVs share this channel.' : state?.runtime.audio_enabled === false ? 'All selected TVs share one browser page.' : 'All selected TVs share this page and its audio.';
@@ -89,7 +91,7 @@ function renderYouTubeStatus(current) {
   $('youtubeState').className = `badge ${youtube.state === 'playing' ? 'good' : youtube.state === 'error' ? 'bad' : ['loading','needs_interaction'].includes(youtube.state) ? 'wait' : ''}`;
 }
 function launchSource(onTVs) {
-  if (busy) return;
+  if (busy || stoppingChannel) return;
   const mode = $('sourceChoice').value;
   let path, body;
   if (mode === 'page') {
@@ -105,11 +107,38 @@ function launchSource(onTVs) {
     body = mode === 'video' ? {mode,url:$('youtubeURL').value.trim()} : {mode,resume:$('youtubeResume').checked};
   }
   if (onTVs) body.tv_ids = [...selectedTVs];
+  const tuning = mode === 'hdhomerun' ? {cancelled:false} : null;
+  if (tuning) pendingChannel = tuning;
   run(async () => {
-    await api(path,body);
-    if (onTVs) selectionDirty = false;
-    pageSelectionDirty = false;
+    try {
+      await api(path,body);
+      if (!tuning?.cancelled) {
+        if (onTVs) selectionDirty = false;
+        pageSelectionDirty = false;
+      }
+    } catch (error) {
+      if (!tuning?.cancelled) throw error;
+    } finally {
+      if (pendingChannel === tuning) pendingChannel = null;
+    }
   });
+}
+
+async function stopAll() {
+  if (!pendingChannel) return run(async () => {
+    await api('api/action/stop',{}); selectedTVs.clear(); selectionDirty=false;
+  });
+  if (stoppingChannel) return;
+  pendingChannel.cancelled = true;
+  stoppingChannel = true; showError(''); controls();
+  try {
+    // This request must reach the controller while Play is still awaiting
+    // warmup. Its generation check prevents that source taking over later.
+    await api('api/action/stop',{});
+    selectedTVs.clear(); selectionDirty=false;
+    await refresh();
+  } catch (error) { showError(error.message); }
+  finally { stoppingChannel=false; controls(); }
 }
 function renderTVChoices() {
   const signature = JSON.stringify(state.tvs.map(({id,name}) => [id,name]));
@@ -288,7 +317,7 @@ $('youtubeURL').oninput=controls;
 $('pageChoice').onchange=()=>{pageSelectionDirty=true;controls();};
 $('openBrowser').onclick=()=>launchSource(false);
 $('cast').onclick=()=>launchSource(true);
-$('stop').onclick=()=>run(async()=>{await api('api/action/stop',{});selectedTVs.clear();selectionDirty=false;});
+$('stop').onclick=stopAll;
 $('closeBrowser').onclick=()=>run(async()=>{await api('api/action/close',{});selectedTVs.clear();selectionDirty=false;});
 document.querySelectorAll('[data-browser]').forEach(button=>button.onclick=()=>run(()=>api('api/action/browser',{action:button.dataset.browser})));
 $('fullscreen').onclick=()=>$('viewport').requestFullscreen();

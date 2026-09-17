@@ -188,8 +188,9 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
             if not isinstance(tv_ids, list) or not tv_ids or any(not isinstance(v, str) for v in tv_ids) or len(tv_ids) != len(set(tv_ids)):
                 raise ValueError()
             receivers = [store.get('tvs', tv_id) for tv_id in tv_ids]
+            generation = session.channel_generation
             source = await channels.source(body['device_id'], body['channel'])
-            await session.channel(source, receivers)
+            await session.channel(source, receivers, generation=generation)
         elif operation == "stop":
             tv_id = body.get('tv_id')
             if tv_id is not None:
@@ -308,12 +309,16 @@ def create_app(directory, settings, *, development=False, session_factory=Sessio
                     device_id, number = command['device_id'], command['channel']
                 else:
                     raise ValueError()
+                generation = session.channel_generation
                 source = await channels.source(device_id, number)
-                await session.channel(source, [tv], replace_receivers=False)
+                await session.channel(source, [tv], replace_receivers=False, generation=generation)
             elif command['action'] == 'stop':
                 await session.stop(tv_id)
             else:
                 raise ValueError()
+        except ChannelError as error:
+            if error.code != 'cancelled':
+                session.update(error=error.safe_message)
         except (ValueError, OSError):
             # Connection failures already belong to the affected TV. Keep a
             # healthy peer's browser-level status clear.
