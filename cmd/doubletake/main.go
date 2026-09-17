@@ -69,6 +69,7 @@ func main() {
 	targetLatencyMs := flag.Int("target-latency-ms", 0, "Joint audio/video playout latency override in milliseconds (0 = automatic AirPlay policy)")
 	hwaccel := flag.String("hwaccel", "auto", "Encoder: auto, nvenc, vaapi, openh264, none (x264/x265)")
 	videoCodec := flag.String("video-codec", "auto", "Screen codec: auto, h264, or hevc (auto uses capability-gated hardware HEVC for high-resolution receivers)")
+	mediaSocket := flag.String("media-socket", "", "Private shared media worker socket (H.264 video and PCM audio)")
 	testMode := flag.Bool("test", false, "Use synthetic video (videotestsrc) instead of screen capture for debugging")
 	noEncrypt := flag.Bool("no-encrypt", false, "Disable RTSP header encryption (debugging only; video frames are always encrypted)")
 	directKey := flag.Bool("direct-key", false, "Use shk/shiv directly without SHA-512 derivation")
@@ -81,6 +82,12 @@ func main() {
 	x11WindowName := flag.String("x11-window-name", "", "X11 window name to capture; prefer -x11-window-id")
 	noCursor := flag.Bool("no-cursor", false, "Don't show the mouse cursor in the captured video")
 	flag.Parse()
+	if *mediaSocket != "" && (*testMode || *daemonize || *videoCodec == "hevc") {
+		log.Fatal("media socket requires single receiver H.264 mode")
+	}
+	if *mediaSocket != "" {
+		*videoCodec = "h264"
+	}
 	if err := airplay.ValidateHWAccel(*hwaccel); err != nil {
 		log.Fatalf("invalid -hwaccel: %v", err)
 	}
@@ -348,7 +355,9 @@ func main() {
 		ShowCursor:    !*noCursor,
 	}
 	var capturePreparation *airplay.CapturePreparation
-	if *testMode {
+	if *mediaSocket != "" {
+		// The shared worker prepares media after receiver canvas negotiation.
+	} else if *testMode {
 		if *noAudio {
 			log.Println("using synthetic video (videotestsrc) for debugging")
 		} else {
@@ -388,7 +397,13 @@ func main() {
 			}
 			return airplay.VideoPreparationResult{}, fmt.Errorf("receiver changed video from %s %dx%d to %s %dx%d during setup", startedCodec, startedWidth, startedHeight, codec, width, height)
 		}
-		startedCapture, startErr := capturePreparation.StartWithCodec(width, height, codec)
+		var startedCapture *airplay.ScreenCapture
+		var startErr error
+		if *mediaSocket != "" {
+			startedCapture, startErr = airplay.StartMediaVideo(ctx, *mediaSocket, width, height)
+		} else {
+			startedCapture, startErr = capturePreparation.StartWithCodec(width, height, codec)
+		}
 		if startErr != nil {
 			return airplay.VideoPreparationResult{}, startErr
 		}
@@ -457,7 +472,13 @@ func main() {
 
 	// Start audio capture and streaming unless disabled.
 	if !*noAudio && session.HasAudio() {
-		audioCapture, err := airplay.StartAudioCapture(ctx, *testMode, session.AudioCodec())
+		var audioCapture *airplay.AudioCapture
+		var err error
+		if *mediaSocket != "" {
+			audioCapture, err = airplay.StartMediaAudio(ctx, *mediaSocket, session.AudioCodec())
+		} else {
+			audioCapture, err = airplay.StartAudioCapture(ctx, *testMode, session.AudioCodec())
+		}
 		if err != nil {
 			log.Printf("warning: audio capture failed: %v (continuing without audio)", err)
 		} else {
